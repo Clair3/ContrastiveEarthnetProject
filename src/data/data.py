@@ -62,7 +62,9 @@ class ContrastiveDataset(Dataset):
     def _to_tensor(self, data):
         """Convert xarray data to a PyTorch tensor."""
         arr = data.to_array().to_numpy()  # shape [variables, time, H, W] maybe
-        return torch.as_tensor(arr, dtype=torch.float32)
+        return torch.as_tensor(arr, dtype=torch.float32).transpose(
+            1, 2
+        )  # now [B, T, C]
 
     def __getitem__(self, idx):
         for attempt in range(self.max_retries):
@@ -100,7 +102,7 @@ class ContrastiveDataset(Dataset):
                 )
                 positive_vegetation_t = self._to_tensor(positive_vegetation)
                 positive_weather_t = self._to_tensor(positive_weather)
-                print(positive_vegetation_t)
+
                 #  Negatives pairs
                 negatives = []
                 negative_years = [y for y in self.years if y != positive_year]
