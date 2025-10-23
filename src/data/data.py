@@ -65,7 +65,6 @@ class ContrastiveDataset(Dataset):
         return torch.as_tensor(arr, dtype=torch.float32)
 
     def __getitem__(self, idx):
-        print("there? getitem")
         for attempt in range(self.max_retries):
             sample_path, positive_year = self.samples[idx]
             try:
@@ -101,9 +100,11 @@ class ContrastiveDataset(Dataset):
                 )
                 positive_vegetation_t = self._to_tensor(positive_vegetation)
                 positive_weather_t = self._to_tensor(positive_weather)
+                print(positive_vegetation_t)
                 #  Negatives pairs
                 negatives = []
                 negative_years = [y for y in self.years if y != positive_year]
+                # print(negative_years, positive_year)
                 for year in negative_years:
                     # Vegetation from another year
                     negative_vegetation = vegetation.sel(
@@ -123,12 +124,13 @@ class ContrastiveDataset(Dataset):
                         positive_weather_t,
                     ),  # Tensor [C, T, H, W] or similar
                     "negatives": negatives,  # List of (veg_tensor, weather_tensor)
-                    "year": positive_year,
+                    "positive_year": positive_year,
                     "path": sample_path,
                     "location": vegetation_location,
                 }
             except Exception as e:
                 logging.warning(f"Skipping {sample_path}: {e}")
+                idx = np.random.randint(0, len(self))
 
         print(f"[ERROR] Failed after {self.max_retries} retries.")
         return  # self._dummy_sample()
@@ -178,7 +180,13 @@ class ContrastiveDataModule(LightningDataModule):
     """
 
     def __init__(
-        self, dataset_path, batch_size=8, num_workers=4, test_year=4, transform=None
+        self,
+        dataset_path,
+        batch_size=8,
+        num_workers=4,
+        years=range(2017, 2023),
+        test_year=2020,
+        transform=None,
     ):
         """
         test_year: index of the held-out year in Zarr array
@@ -188,16 +196,16 @@ class ContrastiveDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.test_year = test_year
+        self.years = years
         self.transform = transform
 
     def setup(self, stage=None):
         paths = [str(p) for p in Path(self.dataset_path).glob("*/*.zarr")]
-        print(self.test_year)
-        years = [
-            year for year in range(2017, 2022) if year != self.test_year
+        training_years = [
+            year for year in self.years if year != self.test_year
         ]  # example
 
-        self.train_dataset = ContrastiveDataset(paths, years)
+        self.train_dataset = ContrastiveDataset(paths, training_years)
         self.test_dataset = ContrastiveDataset(paths, [self.test_year])
 
         # Test: held-out year, full year per location
