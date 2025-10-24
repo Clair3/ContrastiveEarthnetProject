@@ -46,6 +46,7 @@ class TimeSeriesTransformerEncoder(nn.Module):
         x: [B, T, input_dim] - input time series
         """
         # Replace NaNs with zeros before linear layer (they'll be masked out anyway)
+        print(x.shape)
         B, _, _ = x.shape
         # PyTorch transformer expects: True = IGNORE, False = ATTEND
         padding_mask = torch.isnan(x).any(dim=-1)  # [B, T]
@@ -66,25 +67,3 @@ class TimeSeriesTransformerEncoder(nn.Module):
         return self.norm(embedding)
 
 
-# Dual-encoder wrapper
-class VegWeatherContrastiveModels(nn.Module):
-    def __init__(
-        self,
-        veg_dim=1,
-        seq_length_veg=23,
-        weather_dim=2,
-        seq_length_weather=73,
-        d_model=128,
-    ):
-        super().__init__()
-        self.veg_encoder = TimeSeriesTransformerEncoder(
-            veg_dim, sequence_length=seq_length_veg, d_model=d_model
-        )
-        self.weather_encoder = TimeSeriesTransformerEncoder(
-            weather_dim, sequence_length=seq_length_weather, d_model=d_model
-        )
-
-    def forward(self, veg, weather):
-        veg_emb = self.veg_encoder(veg)
-        weather_emb = self.weather_encoder(weather)
-        return veg_emb, weather_emb
