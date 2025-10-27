@@ -58,27 +58,17 @@ for epoch in range(num_epochs):
         optimizer_veg.zero_grad()
         optimizer_weather.zero_grad()
 
-        # Extract positive + negatives
-        positive_veg, positive_weather = batch["positive"]
-        negatives = batch["negatives"]  # list of (neg_veg, neg_weather)
+        vegetation = batch["vegetation"].to(device)
+        weather = batch["weather"].to(device)
 
-        # Move to device
-        positive_veg = positive_veg.to(device)
-        positive_weather = positive_weather.to(device)
         # Forward pass
-        veg_emb = encoder_veg(positive_veg)
-        weather_emb = encoder_weather(positive_weather)
-
-        for negative in negatives:
-            negative_veg, negative_weather = negative
-            negative_veg = negative_veg.to(device)
-            negative_weather = negative_weather.to(device)
-            neg_veg_emb = encoder_veg(negative_veg)
-            neg_weather_emb = encoder_weather(negative_weather)
+        veg_emb = encoder_veg(vegetation)
+        print(veg_emb.shape)
+        weather_emb = encoder_weather(vegetation)
 
         # Compute loss
-        loss_v2w = contrastive_loss(veg_emb, weather_emb, neg_weather_emb)
-        loss_w2v = contrastive_loss(weather_emb, veg_emb, neg_veg_emb)
+        loss_v2w = contrastive_loss(veg_emb, weather_emb)
+        loss_w2v = contrastive_loss(weather_emb, veg_emb)
         loss = (loss_v2w + loss_w2v) / 2
 
         # Backprop

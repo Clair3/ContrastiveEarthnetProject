@@ -1,16 +1,15 @@
 import numpy as np
-import zarr
 from pytorch_lightning import LightningDataModule
 import torch
 from torch.utils.data import Dataset, DataLoader
 import xarray as xr
-import os
 from pathlib import Path
-import time
-import sys
 import logging
-import traceback
-import random
+import pandas as pd
+
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -26,11 +25,12 @@ class ContrastiveDataset(Dataset):
         - negative: another year of same location
     """
 
-    def __init__(self, sample_paths, years, transform=None):
-        self.samples = self._list_pairs(sample_paths, years)
-        self.years = years
-        self.transform = transform
+    def __init__(self, sample_paths, train_years, transform=None):
+        self.sample_paths = sample_paths
+        self.train_years = train_years
         self.max_retries = 5
+        self.temporal_resolution_veg = 16
+        self.temporal_resolution_weather = 5
 
         self.era5_variables = [
             "t2m_mean",  # 2-meter air temperature
@@ -47,84 +47,90 @@ class ContrastiveDataset(Dataset):
             # "ssr_max",
         ]
 
-    def _list_pairs(self, sample_paths, years):
-        # Precompute valid (sample, year) pairs
-        pairs = []
-        for path in sample_paths:
-            for year in years:
-                pairs.append((path, year))
-
-        return pairs
-
     def __len__(self):
-        return len(self.samples)
+        return len(self.sample_paths)
 
     def _to_tensor(self, data):
         """Convert xarray data to a PyTorch tensor."""
         arr = data.to_array().to_numpy()  # shape [variables, time, H, W] maybe
         arr = torch.as_tensor(arr, dtype=torch.float32)
-        return arr.transpose(0, 1)  # now [T, C]
+        return arr.permute(1, 2, 0)  # now [B, T, C]
+
+    def fill_year(self, data, temporal_resolution=16, years=None):
+        """
+        Pads each year to a full 365-day (or 366 for leap years) coverage
+        Returns an xarray with dims (year, doy_period, ...), keeping order.
+        """
+        # --- Define expected day-of-year bins ---
+        doy_bins = np.arange(1, 367, temporal_resolution)
+        n_periods = len(doy_bins)
+
+        padded_years = []
+
+        for year in years:
+            start_date = datetime(year, 1, 1)
+            expected_times = [start_date + timedelta(days=int(d - 1)) for d in doy_bins]
+
+            # Select this year's data
+            data_year = data.sel(time=pd.to_datetime(data.time).year == year)
+
+            # Reindex to fill missing periods with NaN
+            data_year = data_year.reindex(time=pd.to_datetime(expected_times))
+
+            # Assign a simple DOY index for model input
+            data_year = data_year.assign_coords(
+                doy=("time", np.arange(1, n_periods + 1))
+            )
+
+            data_year = data_year.swap_dims({"time": "doy"}).drop_vars("time")
+            padded_years.append(data_year)
+
+        # --- Concatenate along year dimension ---
+        data_padded = xr.concat(padded_years, dim=pd.Index(years, name="year"))
+        return data_padded
 
     def __getitem__(self, idx):
         for _ in range(self.max_retries):
-            sample_path, positive_year = self.samples[idx]
+            sample_path = self.sample_paths[idx]
             try:
                 # Load data
                 ds = xr.open_zarr(sample_path)
-                vegetation = Sentinel2Preprocessing().generate_masked_vegetation_index(
-                    ds
-                )
+                vegetation = Sentinel2Preprocessing(
+                    temporal_resolution=self.temporal_resolution_veg
+                ).generate_masked_vegetation_index(ds)
                 vegetation_location = (
                     vegetation.location.latitude.item(),
                     vegetation.location.longitude.item(),
                 )
-
                 weather = ds[self.era5_variables]
 
                 # Select only the training years
                 vegetation = vegetation.sel(
-                    time=vegetation["time.year"].isin(self.years)
+                    time=vegetation["time.year"].isin(self.train_years)
                 ).isel(
                     location=0
                 )  # remove location dim
-                weather = weather.sel(time=weather["time.year"].isin(self.years))
+                weather = weather.sel(time=weather["time.year"].isin(self.train_years))
+
                 # Normalize
                 weather = weather_normalization(weather)
-
-                # Positive pair
-                positive_vegetation = vegetation.sel(
-                    time=vegetation["time.year"] == positive_year
+                vegetation_per_year = self.fill_and_stack_year(
+                    vegetation,
+                    temporal_resolution=self.temporal_resolution_veg,
+                    years=self.train_years,
                 )
-                positive_weather = weather.sel(
-                    time=weather["time.year"] == positive_year
+                weather_per_year = self.fill_and_stack_year(
+                    weather,
+                    temporal_resolution=self.temporal_resolution_weather,
+                    years=self.train_years,
                 )
-                positive_vegetation_t = self._to_tensor(positive_vegetation)
-                positive_weather_t = self._to_tensor(positive_weather)
 
-                #  Negatives pairs
-                negatives = []
-                negative_years = [y for y in self.years if y != positive_year]
-
-                for year in negative_years:
-                    # Vegetation from another year
-                    negative_vegetation = vegetation.sel(
-                        time=vegetation["time.year"] == year
-                    )
-                    negative_vegetation_t = self._to_tensor(negative_vegetation)
-                    negatives.append((negative_vegetation_t, positive_weather_t))
-
-                    # Weather from another year
-                    negative_weather = weather.sel(time=weather["time.year"] == year)
-                    negative_weather_t = self._to_tensor(negative_weather)
-                    negatives.append((positive_vegetation_t, negative_weather_t))
-
+                vegetation_t = self._to_tensor(vegetation_per_year)
+                weather_t = self._to_tensor(weather_per_year)
+                print(vegetation_t.shape, weather_t.shape)
                 return {
-                    "positive": (
-                        positive_vegetation_t,
-                        positive_weather_t,
-                    ),  # Tensor [C, T, H, W] or similar
-                    "negatives": negatives,  # List of (veg_tensor, weather_tensor)
-                    "positive_year": positive_year,
+                    "vegetation": vegetation_t,
+                    "weather": weather_t,
                     "path": sample_path,
                     "location": vegetation_location,
                 }
@@ -136,44 +142,6 @@ class ContrastiveDataset(Dataset):
         return  # self._dummy_sample()
 
 
-# -----------------------------
-# 2Dataset for test/evaluation (full year)
-# -----------------------------
-# class FullYearDataset(Dataset):
-#     """
-#     Returns full year time series for evaluation.
-#     """
-#
-#     def __init__(self, dataset_path, year, transform=None):
-#         self.store = zarr.open(dataset_path, mode="r")
-#         self.sentinel = self.store["sentinel2"]
-#         self.era5 = self.store["era5"]
-#         self.num_locations = self.sentinel.shape[0]
-#         self.year = year
-#         self.transform = transform
-#
-#     def __len__(self):
-#         return self.num_locations
-#
-#     def __getitem__(self, idx):
-#         sentinel = np.asarray(self.sentinel[idx, self.year], dtype=np.float32)
-#         era5 = np.asarray(self.era5[idx, self.year], dtype=np.float32)
-#
-#         if self.transform:
-#             sentinel, era5 = self.transform(sentinel, era5)
-#
-#         sentinel = torch.from_numpy(sentinel).permute(0, 3, 1, 2)
-#         era5 = torch.from_numpy(era5)
-#         return {
-#             "sentinel": sentinel,  # (T, C, H, W)
-#             "era5": era5,
-#             "loc": idx,
-#         }
-
-
-# -----------------------------
-# 3️⃣ DataModule
-# -----------------------------
 class ContrastiveDataModule(LightningDataModule):
     """
     DataModule for temporal contrastive learning with a held-out test year.

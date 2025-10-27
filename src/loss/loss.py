@@ -53,26 +53,14 @@ def contrastive_loss(veg_emb, weather_emb, negative_embs, temperature=0.07):
 
 
 def contrastive_loss_debug(veg_emb, weather_emb, negative_embs, temperature=0.07):
-    """
-    Args:
-        veg_emb: [B, d] anchor vegetation embedding
-        weather_emb: [B, d] positive weather embedding
-        negative_embs: list of [B, d] embeddings (either veg or weather negatives)
-    """
-    B, d = veg_emb.shape
+    B, _ = veg_emb.shape
 
     # Normalize embeddings
     veg_emb = F.normalize(veg_emb, dim=-1)
     weather_emb = F.normalize(weather_emb, dim=-1)
-    neg_weather_embs = [
-        F.normalize(n[0], dim=-1) for n in negative_embs
-    ]
-
-    # Concatenate positive + negatives for each anchor
-    candidates = torch.cat([weather_emb] + neg_weather_embs, dim=0)  # [B*(1+n), d]
 
     # Compute similarity: veg → all candidates
-    logits = torch.matmul(veg_emb, candidates.T) / temperature  # [B, B*(1+n)]
+    logits = torch.matmul(veg_emb, weather_emb.T) / temperature  # [B, B*(1+n)]
 
     # Positive is first element of each row
     labels = torch.arange(B, device=veg_emb.device)

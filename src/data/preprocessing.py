@@ -23,9 +23,9 @@ def weather_normalization(ds):
 
 
 class Sentinel2Preprocessing:
-    def __init__(self):
+    def __init__(self, temporal_resolution=16):
         self.index = "EVI"
-        self.time_resolution = 16
+        self.temporal_resolution = 16
         self.noise_half_windows = [1]
         self.gapfill = False
 
@@ -43,7 +43,7 @@ class Sentinel2Preprocessing:
         )
         if self._has_excessive_nan(masked_evi):
             raise ValueError("Too many NaNs in masked EVI")
-        ds = self.compute_max_per_period(ds, period_size=self.time_resolution)
+        ds = self.compute_max_per_period(ds, period_size=self.temporal_resolution)
         # ds = NoiseRemovalHelper().cloudfree_timeseries(
         #     ds, noise_half_windows=self.noise_half_windows, gapfill=self.gapfill
         # )
@@ -103,7 +103,7 @@ class Sentinel2Preprocessing:
         """Return array of (lon, lat) indices with sufficient vegetation coverage."""
         vegetation_count = (ds.SCL == 4).sum(dim="time")
         years = np.unique(ds.time.dt.year)
-        threshold = 0.25 * (366 / self.time_resolution) * len(years)
+        threshold = 0.25 * (366 / self.temporal_resolution) * len(years)
         mask = vegetation_count > threshold
         return np.argwhere(mask.values)
 
@@ -206,7 +206,6 @@ class Sentinel2Preprocessing:
 
         # Compute max for each period
         max_per_period = data_grouped.max(dim="time")
-        # max_per_period = data_grouped.max(dim="time")
 
         # Apply the transformation to convert periods back to midpoints in time
         start_period_times = [
@@ -220,10 +219,6 @@ class Sentinel2Preprocessing:
         )
         max_per_period = max_per_period.set_index(location=["longitude", "latitude"])
         return max_per_period
-
-
-import numpy as np
-from abc import ABC
 
 
 class NoiseRemovalHelper(ABC):
