@@ -18,12 +18,12 @@ class ContrastiveTrainingModule(LightningModule):
         return veg_emb, weather_emb
 
     def training_step(self, batch, batch_idx):
-        # if batch is None:
-        #    self.log(
-        #        "train_loss", float("nan"), on_step=True, on_epoch=True, prog_bar=True
-        #    )
-        #    return None  # skip this batch
-        #
+        if batch == None:
+            self.log(
+                "train_loss", float("nan"), on_step=True, on_epoch=True, prog_bar=True
+            )
+            return None  # skip this batch
+
         vegetation = batch["vegetation"]
         weather = batch["weather"]
 
@@ -33,6 +33,27 @@ class ContrastiveTrainingModule(LightningModule):
             "train_loss",
             loss,
             on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=vegetation.shape[0],
+        )
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        if batch == None:
+            self.log(
+                "val_loss", float("nan"), on_step=True, on_epoch=True, prog_bar=True
+            )
+            return None  # skip this batch
+
+        vegetation = batch["vegetation"]
+        weather = batch["weather"]
+        veg_emb, weather_emb = self(vegetation, weather)
+        loss = info_nce_loss(veg_emb, weather_emb)
+        self.log(
+            "val_loss",
+            loss,
+            on_step=False,
             on_epoch=True,
             prog_bar=True,
             batch_size=vegetation.shape[0],
