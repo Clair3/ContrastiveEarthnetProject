@@ -30,14 +30,20 @@ def select_year(data, selected_year, temporal_resolution=16):
     Returns an xarray with dims (year, doy_period, ...), keeping order.
     """
     # --- Define expected day-of-year bins ---
-    doy_bins = np.arange(1, 366, temporal_resolution)
-    start_date = datetime(selected_year, 1, 1)
-    expected_times = [start_date + timedelta(days=int(d - 1)) for d in doy_bins]
+    expected_times = pd.date_range(
+        f"{selected_year}-01-01",
+        f"{selected_year}-12-31",
+        freq=f"{temporal_resolution}D",
+    ).to_numpy(dtype="datetime64[D]")
+
     # Select this year's data
     data_year = data.sel(time=pd.to_datetime(data.time).year == selected_year)
     # Reindex to fill missing periods with NaN
-    data_year = data_year.reindex(time=pd.to_datetime(expected_times))
-
+    data_year = data_year.reindex(
+        time=pd.to_datetime(expected_times),
+        method="nearest",
+        tolerance=np.timedelta64(temporal_resolution // 2, "D"),
+    )
     return data_year
 
 
@@ -52,6 +58,8 @@ class Sentinel2Preprocessing:
         # High-resolution computation
         ds = self._ensure_coordinates(ds)
         ds = self._get_random_vegetation_pixel_series(ds)
+        if ds is None:
+            return None
         evi = self._calculate_vegetation_index(ds)
         mask = self._compute_masks(ds, evi)
         masked_evi = evi * mask

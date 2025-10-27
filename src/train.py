@@ -1,6 +1,6 @@
 from torch import optim
 from pytorch_lightning import LightningModule
-
+import torch
 from models import TimeSeriesTransformerEncoder
 from loss import info_nce_loss
 
@@ -18,11 +18,25 @@ class ContrastiveTrainingModule(LightningModule):
         return veg_emb, weather_emb
 
     def training_step(self, batch, batch_idx):
+        # if batch is None:
+        #    self.log(
+        #        "train_loss", float("nan"), on_step=True, on_epoch=True, prog_bar=True
+        #    )
+        #    return None  # skip this batch
+        #
         vegetation = batch["vegetation"]
         weather = batch["weather"]
+
         veg_emb, weather_emb = self(vegetation, weather)
         loss = info_nce_loss(veg_emb, weather_emb)
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log(
+            "train_loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=vegetation.shape[0],
+        )
         return loss
 
     def configure_optimizers(self):

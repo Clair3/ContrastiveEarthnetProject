@@ -1,17 +1,17 @@
-import numpy as np
 from pytorch_lightning import LightningDataModule
+from torch.utils.data.dataloader import default_collate
 import torch
 from torch.utils.data import Dataset, DataLoader
 import xarray as xr
-from pathlib import Path
 import logging
 import pandas as pd
+from pathlib import Path
 
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
-
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(
+    filename="bad_paths.log",
+    level=logging.WARNING,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
 from .preprocessing import (
     Sentinel2Preprocessing,
@@ -31,9 +31,7 @@ class ContrastiveDataset(Dataset):
     """
 
     def __init__(self, dataset_path, train_years):
-        sample_paths = pd.read_csv("valid_sample_paths.csv")[
-            "sample_path"
-        ].tolist()  ##[str(p) for p in Path(dataset_path).glob("*/*.zarr")]
+        sample_paths = [str(p) for p in Path(dataset_path).glob("*/*.zarr")]
         self.train_years = train_years
         self.training_pairs = self._list_pairs(sample_paths, train_years)
 
@@ -50,10 +48,15 @@ class ContrastiveDataset(Dataset):
             # "pev_mean",  # Potential evapotranspiration
             # "ssr_mean",  # Surface solar radiation
             # "pev_min",
-            # "ssr_min",
+            # "ssr_min",bad_paths_csv
             # "pev_max",
             # "ssr_max",
         ]
+        self.bad_paths_csv = "unvalid_paths_deepextremes.csv"
+        try:
+            self.bad_paths = set(pd.read_csv("unvalid_paths.csv")["bad_path"].tolist())
+        except FileNotFoundError:
+            self.bad_paths = set()
 
     def _list_pairs(self, sample_paths, years):
         # Precompute valid (sample, year) pairs
@@ -70,6 +73,9 @@ class ContrastiveDataset(Dataset):
         """Convert xarray data to a PyTorch tensor."""
         arr = data.to_array().to_numpy()  # shape [variables, time, H, W] maybe
         arr = torch.as_tensor(arr, dtype=torch.float32)
+
+        if torch.isnan(arr).all() or torch.isinf(arr).any():
+            raise ValueError("Tensor contains only NaNs or infs")
         return arr.permute(1, 0)  # now [T, C]
 
     def __getitem__(self, idx: int) -> dict | None:
@@ -79,6 +85,7 @@ class ContrastiveDataset(Dataset):
             ds = xr.open_zarr(sample_path)
         except Exception as e:
             logging.warning(f"Failed to open Zarr {sample_path}: {e}")
+            self._record_bad_path(sample_path)
             return None
 
         try:
@@ -98,13 +105,27 @@ class ContrastiveDataset(Dataset):
 
         except Exception as e:
             logging.warning(f"Skipping {sample_path}: {e}")
+            self._record_bad_path(sample_path)
             return None
+
+    def _record_bad_path(self, path):
+        """Append bad path to CSV if not already recorded"""
+        if path not in self.bad_paths:
+            self.bad_paths.add(path)
+            pd.DataFrame({"bad_path": [path]}).to_csv(
+                self.bad_paths_csv,
+                mode="a",
+                header=not Path(self.bad_paths_csv).exists(),
+                index=False,
+            )
 
     # --- helper functions ---
     def _process_vegetation(self, ds: xr.Dataset, year: int) -> xr.DataArray:
         veg_index = Sentinel2Preprocessing(
             temporal_resolution=self.temporal_resolution_veg
         ).generate_masked_vegetation_index(ds)
+        if veg_index is None:
+            raise ValueError("Vegetation index computation failed")
         return select_year(
             veg_index,
             temporal_resolution=self.temporal_resolution_veg,
@@ -167,11 +188,11 @@ class ContrastiveDataModule(LightningDataModule):
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset,
-            batch_size=self.batch_size,
             batch_sampler=BatchSampler(
                 dataset=self.train_dataset,
                 shuffle=True,
             ),
+            collate_fn=safe_collate,
             num_workers=self.num_workers,
             pin_memory=True,
         )
@@ -182,6 +203,7 @@ class ContrastiveDataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=safe_collate,
             pin_memory=True,
         )
 
@@ -191,5 +213,14 @@ class ContrastiveDataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=safe_collate,
             pin_memory=True,
         )
+
+
+def safe_collate(batch):
+    # Remove any None entries
+    batch = [b for b in batch if b is not None]
+    if len(batch) == 0:
+        return None  # whole batch invalid
+    return default_collate(batch)

@@ -7,7 +7,7 @@ from models import TimeSeriesTransformerEncoder
 from train import ContrastiveTrainingModule
 from loss import info_nce_loss
 
-logger = TensorBoardLogger("tb_logs", name="contrastive_experiment")
+logger = TensorBoardLogger("run_logs", name="contrastive_experiment")
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -41,7 +41,7 @@ contrastive_model = ContrastiveTrainingModule(
 )
 
 trainer = Trainer(
-    max_epochs=10,
+    max_epochs=1,
     accelerator="gpu",  # automatically uses available GPU
     devices=1,  # number of GPUs to use
     logger=logger,
