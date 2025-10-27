@@ -13,7 +13,12 @@ from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.WARNING)
 
-from .preprocessing import Sentinel2Preprocessing, weather_normalization
+from .preprocessing import (
+    Sentinel2Preprocessing,
+    weather_normalization,
+    select_year,
+)
+from .batch_sampler import BatchSampler
 
 
 class ContrastiveDataset(Dataset):
@@ -25,10 +30,13 @@ class ContrastiveDataset(Dataset):
         - negative: another year of same location
     """
 
-    def __init__(self, sample_paths, train_years, transform=None):
-        self.sample_paths = sample_paths
+    def __init__(self, dataset_path, train_years):
+        sample_paths = pd.read_csv("valid_sample_paths.csv")[
+            "sample_path"
+        ].tolist()  ##[str(p) for p in Path(dataset_path).glob("*/*.zarr")]
         self.train_years = train_years
-        self.max_retries = 5
+        self.training_pairs = self._list_pairs(sample_paths, train_years)
+
         self.temporal_resolution_veg = 16
         self.temporal_resolution_weather = 5
 
@@ -47,99 +55,72 @@ class ContrastiveDataset(Dataset):
             # "ssr_max",
         ]
 
+    def _list_pairs(self, sample_paths, years):
+        # Precompute valid (sample, year) pairs
+        pairs = []
+        for sample_path in sample_paths:
+            for year in years:
+                pairs.append((sample_path, year))
+        return pairs
+
     def __len__(self):
-        return len(self.sample_paths)
+        return len(self.training_pairs)
 
     def _to_tensor(self, data):
         """Convert xarray data to a PyTorch tensor."""
         arr = data.to_array().to_numpy()  # shape [variables, time, H, W] maybe
         arr = torch.as_tensor(arr, dtype=torch.float32)
-        return arr.permute(1, 2, 0)  # now [B, T, C]
+        return arr.permute(1, 0)  # now [T, C]
 
-    def fill_year(self, data, temporal_resolution=16, years=None):
-        """
-        Pads each year to a full 365-day (or 366 for leap years) coverage
-        Returns an xarray with dims (year, doy_period, ...), keeping order.
-        """
-        # --- Define expected day-of-year bins ---
-        doy_bins = np.arange(1, 367, temporal_resolution)
-        n_periods = len(doy_bins)
+    def __getitem__(self, idx: int) -> dict | None:
+        sample_path, year = self.training_pairs[idx]
 
-        padded_years = []
+        try:
+            ds = xr.open_zarr(sample_path)
+        except Exception as e:
+            logging.warning(f"Failed to open Zarr {sample_path}: {e}")
+            return None
 
-        for year in years:
-            start_date = datetime(year, 1, 1)
-            expected_times = [start_date + timedelta(days=int(d - 1)) for d in doy_bins]
-
-            # Select this year's data
-            data_year = data.sel(time=pd.to_datetime(data.time).year == year)
-
-            # Reindex to fill missing periods with NaN
-            data_year = data_year.reindex(time=pd.to_datetime(expected_times))
-
-            # Assign a simple DOY index for model input
-            data_year = data_year.assign_coords(
-                doy=("time", np.arange(1, n_periods + 1))
+        try:
+            vegetation = self._process_vegetation(ds, year)
+            weather = self._process_weather(ds, year)
+            vegetation_location = (
+                vegetation.location.latitude.item(),
+                vegetation.location.longitude.item(),
             )
 
-            data_year = data_year.swap_dims({"time": "doy"}).drop_vars("time")
-            padded_years.append(data_year)
+            return {
+                "vegetation": self._to_tensor(vegetation),
+                "weather": self._to_tensor(weather),
+                "path": sample_path,
+                "location": vegetation_location,
+            }
 
-        # --- Concatenate along year dimension ---
-        data_padded = xr.concat(padded_years, dim=pd.Index(years, name="year"))
-        return data_padded
+        except Exception as e:
+            logging.warning(f"Skipping {sample_path}: {e}")
+            return None
 
-    def __getitem__(self, idx):
-        for _ in range(self.max_retries):
-            sample_path = self.sample_paths[idx]
-            try:
-                # Load data
-                ds = xr.open_zarr(sample_path)
-                vegetation = Sentinel2Preprocessing(
-                    temporal_resolution=self.temporal_resolution_veg
-                ).generate_masked_vegetation_index(ds)
-                vegetation_location = (
-                    vegetation.location.latitude.item(),
-                    vegetation.location.longitude.item(),
-                )
-                weather = ds[self.era5_variables]
+    # --- helper functions ---
+    def _process_vegetation(self, ds: xr.Dataset, year: int) -> xr.DataArray:
+        veg_index = Sentinel2Preprocessing(
+            temporal_resolution=self.temporal_resolution_veg
+        ).generate_masked_vegetation_index(ds)
+        return select_year(
+            veg_index,
+            temporal_resolution=self.temporal_resolution_veg,
+            selected_year=year,
+        )
 
-                # Select only the training years
-                vegetation = vegetation.sel(
-                    time=vegetation["time.year"].isin(self.train_years)
-                ).isel(
-                    location=0
-                )  # remove location dim
-                weather = weather.sel(time=weather["time.year"].isin(self.train_years))
-
-                # Normalize
-                weather = weather_normalization(weather)
-                vegetation_per_year = self.fill_and_stack_year(
-                    vegetation,
-                    temporal_resolution=self.temporal_resolution_veg,
-                    years=self.train_years,
-                )
-                weather_per_year = self.fill_and_stack_year(
-                    weather,
-                    temporal_resolution=self.temporal_resolution_weather,
-                    years=self.train_years,
-                )
-
-                vegetation_t = self._to_tensor(vegetation_per_year)
-                weather_t = self._to_tensor(weather_per_year)
-                print(vegetation_t.shape, weather_t.shape)
-                return {
-                    "vegetation": vegetation_t,
-                    "weather": weather_t,
-                    "path": sample_path,
-                    "location": vegetation_location,
-                }
-            except Exception as e:
-                logging.warning(f"Skipping {sample_path}: {e}")
-                idx = np.random.randint(0, len(self))
-
-        print(f"[ERROR] Failed after {self.max_retries} retries.")
-        return  # self._dummy_sample()
+    def _process_weather(self, ds: xr.Dataset, year: int) -> xr.DataArray:
+        weather = ds[self.era5_variables]
+        # Keep only training years
+        weather = weather.sel(time=weather["time.year"].isin(self.train_years))
+        weather = weather_normalization(weather)
+        return select_year(
+            weather,
+            temporal_resolution=self.temporal_resolution_weather,
+            selected_year=year,
+        )
 
 
 class ContrastiveDataModule(LightningDataModule):
@@ -160,21 +141,23 @@ class ContrastiveDataModule(LightningDataModule):
         test_year: index of the held-out year in Zarr array
         """
         super().__init__()
-        self.dataset_path = dataset_path
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.dataset_path = dataset_path
         self.test_year = test_year
-        self.years = years
-        self.transform = transform
+        self.training_years = [year for year in years if year != self.test_year]
 
     def setup(self, stage=None):
-        paths = [str(p) for p in Path(self.dataset_path).glob("*/*.zarr")]
-        training_years = [
-            year for year in self.years if year != self.test_year
-        ]  # example
 
-        self.train_dataset = ContrastiveDataset(paths, training_years)
-        self.test_dataset = ContrastiveDataset(paths, [self.test_year])
+        self.train_dataset = ContrastiveDataset(
+            dataset_path=self.dataset_path,
+            train_years=self.training_years,
+        )
+        # self.test_dataset = ContrastiveDataset(
+        #     dataset_path=self.dataset_path,
+        #     train_years=[self.test_year],
+        #     transform=None,
+        # )
 
         # Test: held-out year, full year per location
         # self.test_dataset = FullYearDataset(
@@ -185,7 +168,10 @@ class ContrastiveDataModule(LightningDataModule):
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            batch_sampler=BatchSampler(
+                dataset=self.train_dataset,
+                shuffle=True,
+            ),
             num_workers=self.num_workers,
             pin_memory=True,
         )

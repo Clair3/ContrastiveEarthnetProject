@@ -1,1 +1,1 @@
-from .loss import contrastive_loss
+from .loss import info_nce_loss
