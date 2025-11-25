@@ -6,7 +6,7 @@ from loss import info_nce_loss
 
 
 class ContrastiveTrainingModule(LightningModule):
-    def __init__(self, encoder_veg, encoder_weather, lr=1e-3):
+    def __init__(self, encoder_veg, encoder_weather, lr=5e-5):
         super().__init__()
         self.encoder_veg = encoder_veg
         self.encoder_weather = encoder_weather
@@ -41,9 +41,6 @@ class ContrastiveTrainingModule(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         if batch == None:
-            self.log(
-                "val_loss", float("nan"), on_step=True, on_epoch=True, prog_bar=True
-            )
             return None  # skip this batch
 
         vegetation = batch["vegetation"]

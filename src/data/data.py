@@ -12,12 +12,6 @@ logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
-
-from .preprocessing import (
-    Sentinel2Preprocessing,
-    weather_normalization,
-    select_year,
-)
 from .batch_sampler import BatchSampler
 
 
@@ -33,7 +27,7 @@ class TrainContrastiveDataset(Dataset):
     def __init__(self, dataset_path, train_years):
         sample_paths = [str(p) for p in Path(dataset_path).glob("*/*.zarr")]
         self.train_years = train_years
-        self.training_pairs = self._list_pairs(sample_paths, train_years)
+        self.training_pairs = self._list_pairs(sample_paths, train_years)[:2000]
 
         self.temporal_resolution_veg = 16
         self.temporal_resolution_weather = 5
@@ -102,6 +96,7 @@ class TrainContrastiveDataset(Dataset):
                 "path": sample_path,
                 "location": vegetation_location,
             }
+
             return data
 
         except Exception as e:
@@ -120,30 +115,6 @@ class TrainContrastiveDataset(Dataset):
                 index=False,
             )
 
-    # --- helper functions ---
-    def _process_vegetation(self, ds: xr.Dataset, year: int) -> xr.DataArray:
-        veg_index = Sentinel2Preprocessing(
-            temporal_resolution=self.temporal_resolution_veg
-        ).generate_masked_vegetation_index(ds)
-        if veg_index is None:
-            raise ValueError("Vegetation index computation failed")
-        return select_year(
-            veg_index,
-            temporal_resolution=self.temporal_resolution_veg,
-            selected_year=year,
-        )
-
-    def _process_weather(self, ds: xr.Dataset, year: int) -> xr.DataArray:
-        weather = ds[self.era5_variables]
-        # Keep only training years
-        weather = weather.sel(time=weather["time.year"].isin(self.train_years))
-        weather = weather_normalization(weather)
-        return select_year(
-            weather,
-            temporal_resolution=self.temporal_resolution_weather,
-            selected_year=year,
-        )
-
 
 class ValContrastiveDataset(TrainContrastiveDataset):
 
@@ -151,7 +122,7 @@ class ValContrastiveDataset(TrainContrastiveDataset):
         sample_paths = [str(p) for p in Path(dataset_path).glob("*/*.zarr")]
         self.train_years = train_years
         self.val_years = heldout_years
-        self.training_pairs = self._list_pairs(sample_paths, heldout_years)
+        self.training_pairs = self._list_pairs(sample_paths, heldout_years)[:2000]
         self.temporal_resolution_veg = 16
         self.temporal_resolution_weather = 5
 
@@ -204,7 +175,7 @@ class ValContrastiveDataset(TrainContrastiveDataset):
                 vegetation.location.latitude.item(),
                 vegetation.location.longitude.item(),
             )
-            print(vegetation.evi.values)
+            # print(vegetation.evi.values)
 
             data = {
                 "vegetation": self._to_tensor(vegetation),
@@ -212,8 +183,6 @@ class ValContrastiveDataset(TrainContrastiveDataset):
                 "path": sample_path,
                 "location": vegetation_location,
             }
-            print(data["vegetation"])
-            print(data["weather"])
             return data
 
         except Exception as e:

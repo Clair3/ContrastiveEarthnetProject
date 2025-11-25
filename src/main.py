@@ -20,7 +20,7 @@ def main():
     datamodule = ContrastiveDataModule(
         dataset_path=dataset_path,
         batch_size=1,
-        num_workers=4,
+        num_workers=16,
         training_years=range(2016, 2023),
         test_years=[2020, 2021],  # last year held out
         val_years=[2020, 2021],  # last year held out
@@ -45,7 +45,9 @@ def main():
         devices=1,  # number of GPUs to use
         logger=logger,
         accumulate_grad_batches=16,
-        log_every_n_steps=10,
+        log_every_n_steps=16,
+        gradient_clip_val=1.0,
+        profiler="advanced",
     )
 
     trainer.fit(contrastive_model, datamodule=datamodule)

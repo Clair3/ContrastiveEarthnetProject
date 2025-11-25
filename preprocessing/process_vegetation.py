@@ -7,46 +7,6 @@ import numpy as np
 from abc import ABC
 
 
-# Helper function for weather normalization
-def weather_normalization(ds):
-    """Normalize specified weather variables to [0, 1] range."""
-    normalized_data = {}
-    for var in ds:
-        if var.startswith("tp_"):
-            data_array = np.log1p(ds[var])  # equivalent to log(1 + tp)
-        else:
-            data_array = ds[var]
-        min_val = data_array.min()
-        max_val = data_array.max()
-        normalized = (data_array - min_val) / (max_val - min_val + 1e-8)
-        normalized_data[var] = normalized
-    return xr.Dataset(normalized_data)
-
-
-# Helper function to select and fill data for a specific year
-def select_year(data, selected_year, temporal_resolution=16):
-    """
-    Pads each year to a full 365-day (or 366 for leap years) coverage
-    Returns an xarray with dims (year, doy_period, ...), keeping order.
-    """
-    # --- Define expected day-of-year bins ---
-    expected_times = pd.date_range(
-        f"{selected_year}-01-01",
-        f"{selected_year}-12-31",
-        freq=f"{temporal_resolution}D",
-    ).to_numpy(dtype="datetime64[D]")
-
-    # Select this year's data
-    data_year = data.sel(time=pd.to_datetime(data.time).year == selected_year)
-    # Reindex to fill missing periods with NaN
-    data_year = data_year.reindex(
-        time=pd.to_datetime(expected_times),
-        method="nearest",
-        tolerance=np.timedelta64(temporal_resolution // 2, "D"),
-    )
-    return data_year
-
-
 class Sentinel2Preprocessing:
     def __init__(self, temporal_resolution=16):
         self.index = "EVI"
