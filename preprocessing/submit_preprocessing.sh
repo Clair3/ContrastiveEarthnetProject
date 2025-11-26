@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess_samples
-#SBATCH --array=0-1          # Only 2 tasks needed for 10 samples
+#SBATCH --array=0-7392%200          
 #SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
@@ -13,7 +13,7 @@ source /Net/Groups/BGI/scratch/crobin/miniconda3/bin/activate ExtremesEnv2
 export PYTHONPATH=/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject:$PYTHONPATH
 
 CHUNK_SIZE=5
-LIST="sample_paths_small.txt"
+LIST="sample_paths.txt"
 OUTDIR="datasets/train/samples/"
 
 START=$(( SLURM_ARRAY_TASK_ID * CHUNK_SIZE ))
@@ -27,6 +27,5 @@ sed -n "$((START+1)),$((END+1))p" "$LIST" | while read SAMPLE; do
     python process_sample.py \
     --input-path "$SAMPLE" \
     --output-dir "$OUTDIR" \
-    --years "2016,2017,2018,2019,2022" \
     --mode single
 done

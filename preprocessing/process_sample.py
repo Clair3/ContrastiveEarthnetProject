@@ -76,54 +76,31 @@ class ProcessTrainDataset:
     # -------------------
     # High-level API
     # -------------------
-    def build_multi_year_zarr(self, sample_path: Path) -> xr.Dataset:
-        """
-        Build a single xarray.Dataset containing all train_years for this sample.
-        The returned dataset has dims: year, time, ... and coords latitude/longitude.
-        """
+    def process_variables(self, sample_path: Path) -> xr.Dataset:
+
         ds = xr.open_zarr(sample_path)
+        vegetation = self._process_vegetation(ds)
+        weather = self._process_weather(ds)
 
-        year_datasets = []
-        lat = None
-        lon = None
+        # expand dims so concat along 'year' works as expected
+        ds = xr.Dataset(
+            coords={
+                "time": vegetation.time,
+            }
+        )
+        # --- Loop through vegetation variables ---
+        for v in vegetation.data_vars:
+            ds[v] = vegetation[v].chunk({"time": -1})
 
-        for year in self.train_years:
-            vegetation = self._process_vegetation(ds, year)
-            weather = self._process_weather(ds, year)
+        # --- Loop through weather variables ---
+        for w in weather.data_vars:
+            ds[w] = weather[w].chunk({"time": -1})
 
-            # ensure we get scalars for lat/lon
-            lat = float(vegetation.location.latitude.item())
-            lon = float(vegetation.location.longitude.item())
+        lat, lon = ds.location.item()
+        ds = ds.drop_vars("location")
+        ds = ds.assign_coords(longitude=lon, latitude=lat)
 
-            # expand dims so concat along 'year' works as expected
-            veg_exp = vegetation.expand_dims(year=[year])
-            weather_exp = weather.expand_dims(year=[year])
-
-            ds_year = xr.Dataset(
-                coords={
-                    "latitude": [lat],
-                    "longitude": [lon],
-                    "time": vegetation.time,
-                    "year": [year],
-                }
-            )
-
-            # --- Loop through vegetation variables ---
-            for v in vegetation.data_vars:
-                ds_year[v] = veg_exp[v]
-
-            # --- Loop through weather variables ---
-            for w in weather.data_vars:
-                ds_year[w] = weather_exp[w]
-
-            ds_year = ds_year.drop_vars("location", errors="ignore")
-
-            year_datasets.append(ds_year)
-        combined = xr.concat(year_datasets, dim="year")
-        # store scalar coords outside of year dimension (latitude/longitude)
-        print(combined)
-        # combined = combined.assign_coords(latitude=lat, longitude=lon)
-        return combined
+        return ds
 
     def process_one_sample(self, sample_path: str | Path) -> Path | None:
         """
@@ -132,14 +109,14 @@ class ProcessTrainDataset:
         """
         path = Path(sample_path)
         try:
-            combined = self.build_multi_year_zarr(path)
-            lat = float(combined.latitude.item())
-            lon = float(combined.longitude.item())
+            ds = self.process_variables(path)
+            lat = ds.latitude.item()
+            lon = ds.longitude.item()
 
-            out_name = f"{path.stem}_{lat:.4f}_{lon:.4f}.zarr"
+            out_name = f"{path.stem}_{lat:.3f}_{lon:.3f}.zarr"
             out_path = self.output_dir / out_name
             logger.info(f"Writing {out_path}")
-            combined.to_zarr(store=str(out_path), mode="w")
+            ds.to_zarr(store=str(out_path), mode="w")
             return out_path
         except Exception as e:
             logger.exception(f"Failed processing {path}: {e}")
@@ -149,7 +126,7 @@ class ProcessTrainDataset:
     # -------------------
     # Helpers
     # -------------------
-    def _process_vegetation(self, ds: xr.Dataset, year: int) -> xr.DataArray:
+    def _process_vegetation(self, ds: xr.Dataset) -> xr.DataArray:
         veg_index = Sentinel2Preprocessing(
             temporal_resolution=self.temporal_resolution_veg
         ).generate_masked_vegetation_index(ds)
@@ -162,7 +139,7 @@ class ProcessTrainDataset:
         #     temporal_resolution=self.temporal_resolution_veg,
         # )
 
-    def _process_weather(self, ds: xr.Dataset, year: int) -> xr.DataArray:
+    def _process_weather(self, ds: xr.Dataset) -> xr.DataArray:
         weather = ds[self.era5_variables]
         weather = weather_normalization(weather)
         return weather
@@ -282,12 +259,6 @@ def parse_args():
         "--n-jobs", type=int, default=None, help="Number of processes for multiproc"
     )
     p.add_argument("--output-dir", type=str, required=True)
-    p.add_argument(
-        "--years",
-        type=str,
-        required=True,
-        help="Comma-separated years, e.g. 2016,2017,2018",
-    )
     p.add_argument("--temporal-resolution-veg", type=int, default=16)
     p.add_argument("--temporal-resolution-weather", type=int, default=5)
     return p.parse_args()
