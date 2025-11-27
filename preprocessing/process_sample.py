@@ -4,11 +4,11 @@ process_train_dataset.py
 
 Usage (single sample, good for Slurm array):
     python process_train_dataset.py --input-list sample_paths.txt --task-id $SLURM_ARRAY_TASK_ID \
-        --output-dir /path/to/out --years 2016,2017,2018,2019,2020,2021,2022
+        --output-dir /path/to/out 
 
 Usage (multiprocessing local):
     python process_train_dataset.py --input-dir /path/to/minicubes --mode multiproc \
-        --n-jobs 16 --output-dir /path/to/out --years 2016,2017,2018,2019
+        --n-jobs 16 --output-dir /path/to/out
 
 Usage (single path):
     python process_train_dataset.py --input-path /path/to/minicube.zarr --output-dir ...
@@ -37,13 +37,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 class ProcessTrainDataset:
     def __init__(
         self,
-        train_years: Iterable[int],
         temporal_resolution_veg: int,
         temporal_resolution_weather: int,
         era5_variables: List[str] | None = None,
         output_dir: str | Path = "preprocessed/samples",
     ):
-        self.train_years = list(train_years)
         self.temporal_resolution_veg = int(temporal_resolution_veg)
         self.temporal_resolution_weather = int(temporal_resolution_weather)
         self.output_dir = Path(output_dir)
@@ -82,7 +80,6 @@ class ProcessTrainDataset:
         vegetation = self._process_vegetation(ds)
         weather = self._process_weather(ds)
 
-        # expand dims so concat along 'year' works as expected
         ds = xr.Dataset(
             coords={
                 "time": vegetation.time,
@@ -267,9 +264,7 @@ def parse_args():
 def main():
     args = parse_args()
 
-    years = [int(x) for x in args.years.split(",") if x.strip()]
     worker = ProcessTrainDataset(
-        train_years=years,
         temporal_resolution_veg=args.temporal_resolution_veg,
         temporal_resolution_weather=args.temporal_resolution_weather,
         output_dir=args.output_dir,

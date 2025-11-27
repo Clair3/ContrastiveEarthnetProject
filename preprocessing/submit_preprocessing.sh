@@ -14,7 +14,7 @@ export PYTHONPATH=/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarth
 
 CHUNK_SIZE=5
 LIST="sample_paths.txt"
-OUTDIR="datasets/train/samples/"
+OUTDIR="datasets/samples/"
 
 START=$(( SLURM_ARRAY_TASK_ID * CHUNK_SIZE ))
 END=$(( START + CHUNK_SIZE - 1 ))
