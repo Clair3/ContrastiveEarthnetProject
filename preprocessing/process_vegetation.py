@@ -30,10 +30,11 @@ class Sentinel2Preprocessing:
         )
         if self._has_excessive_nan(masked_evi):
             raise ValueError("Too many NaNs in masked EVI")
+
         ds = self.compute_max_per_period(ds, period_size=self.temporal_resolution)
-        # ds = NoiseRemovalHelper().cloudfree_timeseries(
-        #     ds, noise_half_windows=self.noise_half_windows, gapfill=self.gapfill
-        # )
+        ds = NoiseRemovalHelper().cloudfree_timeseries(
+            ds, noise_half_windows=self.noise_half_windows, gapfill=self.gapfill
+        )
         return ds.isel(location=0)  # remove location dim
 
     def _ensure_coordinates(self, ds):

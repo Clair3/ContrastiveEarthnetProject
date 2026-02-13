@@ -6,16 +6,13 @@ import xarray as xr
 import logging
 import pandas as pd
 from pathlib import Path
+import numpy as np
+import random
 
-logging.basicConfig(
-    filename="bad_paths.log",
-    level=logging.WARNING,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
 from .batch_sampler import BatchSampler
 
 
-class TrainContrastiveDataset(Dataset):
+class ContrastiveDataset(Dataset):
     """
     Contrastive dataset for Sentinel-2 + ERA5 time series.
     Each sample returns:
@@ -24,14 +21,14 @@ class TrainContrastiveDataset(Dataset):
         - negative: another year of same location
     """
 
-    def __init__(self, dataset_path, train_years):
-        sample_paths = [str(p) for p in Path(dataset_path).glob("*/*.zarr")]
-        self.train_years = train_years
-        self.training_pairs = self._list_pairs(sample_paths, train_years)[:2000]
-
-        self.temporal_resolution_veg = 16
-        self.temporal_resolution_weather = 5
-
+    def __init__(self, dataset_path):
+        self.dataset = xr.open_zarr(dataset_path)
+        samples_ids = self.dataset.sample.values.tolist()
+        self.years = self.dataset.time_veg.dt.year.values.tolist()
+        self.training_pairs = self._list_pairs(samples_ids, self.years)[:100]
+        self.sentinel2_variables = [
+            "evi",  # Enhanced Vegetation Index
+        ]
         self.era5_variables = [
             "t2m_mean",  # 2-meter air temperature
             # "tp_mean",  # Total precipitation
@@ -42,22 +39,19 @@ class TrainContrastiveDataset(Dataset):
             # "pev_mean",  # Potential evapotranspiration
             # "ssr_mean",  # Surface solar radiation
             # "pev_min",
-            # "ssr_min",bad_paths_csv
+            # "ssr_min",
             # "pev_max",
             # "ssr_max",
         ]
-        self.bad_paths_csv = "unvalid_paths_deepextremes.csv"
-        try:
-            self.bad_paths = set(pd.read_csv("unvalid_paths.csv")["bad_path"].tolist())
-        except FileNotFoundError:
-            self.bad_paths = set()
+        self.temporal_resolution_veg = 16
+        self.temporal_resolution_weather = 5
 
-    def _list_pairs(self, sample_paths, years):
+    def _list_pairs(self, sample_ids, years):
         # Precompute valid (sample, year) pairs
         pairs = []
-        for sample_path in sample_paths:
+        for sample_id in sample_ids:
             for year in years:
-                pairs.append((sample_path, year))
+                pairs.append((sample_id, year))
         return pairs
 
     def __len__(self):
@@ -73,121 +67,35 @@ class TrainContrastiveDataset(Dataset):
         return arr.permute(1, 0)  # now [T, C]
 
     def __getitem__(self, idx: int) -> dict | None:
-        sample_path, year = self.training_pairs[idx]
+        sample_id, year = self.training_pairs[idx]
+        print(f"Loading sample {sample_id} for year {year}")
 
         try:
-            ds = xr.open_zarr(sample_path)
-        except Exception as e:
-            logging.warning(f"Failed to open Zarr {sample_path}: {e}")
-            self._record_bad_path(sample_path)
-            return None
+            sample = self.dataset.sel(
+                sample=sample_id,
+            )
+            vegetation = sample[self.sentinel2_variables].sel(
+                time_veg=sample.time_veg.dt.year == int(year)
+            )
+            weather = sample[self.era5_variables].sel(
+                time_weather=sample.time_weather.dt.year == int(year)
+            )
 
-        try:
-            vegetation = self._process_vegetation(ds, year)
-            weather = self._process_weather(ds, year)
             vegetation_location = (
-                vegetation.location.latitude.item(),
-                vegetation.location.longitude.item(),
+                sample.latitude.values.item(),
+                sample.longitude.values.item(),
             )
 
             data = {
                 "vegetation": self._to_tensor(vegetation),
                 "weather": self._to_tensor(weather),
-                "path": sample_path,
                 "location": vegetation_location,
             }
 
             return data
 
         except Exception as e:
-            logging.warning(f"Skipping {sample_path}: {e}")
-            self._record_bad_path(sample_path)
-            return None
-
-    def _record_bad_path(self, path):
-        """Append bad path to CSV if not already recorded"""
-        if path not in self.bad_paths:
-            self.bad_paths.add(path)
-            pd.DataFrame({"bad_path": [path]}).to_csv(
-                self.bad_paths_csv,
-                mode="a",
-                header=not Path(self.bad_paths_csv).exists(),
-                index=False,
-            )
-
-
-class ValContrastiveDataset(TrainContrastiveDataset):
-
-    def __init__(self, dataset_path, train_years, heldout_years):
-        sample_paths = [str(p) for p in Path(dataset_path).glob("*/*.zarr")]
-        self.train_years = train_years
-        self.val_years = heldout_years
-        self.training_pairs = self._list_pairs(sample_paths, heldout_years)[:2000]
-        self.temporal_resolution_veg = 16
-        self.temporal_resolution_weather = 5
-
-        self.era5_variables = [
-            "t2m_mean",  # 2-meter air temperature
-            # "tp_mean",  # Total precipitation
-            # "t2m_min",
-            # "tp_min",
-            # "t2m_max",
-            "tp_max",
-            # "pev_mean",  # Potential evapotranspiration
-            # "ssr_mean",  # Surface solar radiation
-            # "pev_min",
-            # "ssr_min",bad_paths_csv
-            # "pev_max",
-            # "ssr_max",
-        ]
-        self.bad_paths_csv = "unvalid_paths_deepextremes.csv"
-        try:
-            self.bad_paths = set(pd.read_csv("unvalid_paths.csv")["bad_path"].tolist())
-        except FileNotFoundError:
-            self.bad_paths = set()
-
-    def _process_weather(self, ds: xr.Dataset, year: int) -> xr.DataArray:
-        weather = ds[self.era5_variables]
-        # Keep only training years
-        weather_train = weather.sel(time=weather["time.year"].isin(self.train_years))
-        weather_train = weather_normalization(weather_train)
-        weather = weather.sel(time=weather["time.year"].isin(year))
-        return select_year(
-            weather,
-            temporal_resolution=self.temporal_resolution_weather,
-            selected_year=year,
-        )
-
-    def __getitem__(self, idx: int) -> dict | None:
-        sample_path, year = self.training_pairs[idx]
-
-        try:
-            ds = xr.open_zarr(sample_path)
-        except Exception as e:
-            logging.warning(f"Failed to open Zarr {sample_path}: {e}")
-            self._record_bad_path(sample_path)
-            return None
-
-        try:
-            vegetation = self._process_vegetation(ds, year)
-            weather = self._process_weather(ds, year)
-            vegetation_location = (
-                vegetation.location.latitude.item(),
-                vegetation.location.longitude.item(),
-            )
-            # print(vegetation.evi.values)
-
-            data = {
-                "vegetation": self._to_tensor(vegetation),
-                "weather": self._to_tensor(weather),
-                "path": sample_path,
-                "location": vegetation_location,
-            }
-            return data
-
-        except Exception as e:
-            logging.warning(f"Skipping {sample_path}: {e}")
-            self._record_bad_path(sample_path)
+            logging.warning(f"Skipping {sample_id}: {e}")
             return None
 
 
@@ -200,10 +108,7 @@ class ContrastiveDataModule(LightningDataModule):
         self,
         dataset_path,
         batch_size=8,
-        num_workers=4,
-        training_years=range(2017, 2023),
-        val_years=[2021],
-        test_years=[2020],
+        num_workers=16,
     ):
         """
         test_year: index of the held-out year in Zarr array
@@ -211,31 +116,19 @@ class ContrastiveDataModule(LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.dataset_path = dataset_path
-        self.val_years = val_years if isinstance(val_years, list) else [test_years]
-        self.test_years = test_years if isinstance(test_years, list) else [test_years]
-        self.train_years = [
-            year
-            for year in training_years
-            if year not in self.test_years and year not in self.val_years
-        ]
+        self.dataset_path = Path(dataset_path)
 
     def setup(self, stage=None):
 
-        self.train_dataset = TrainContrastiveDataset(
-            dataset_path=self.dataset_path,
-            train_years=self.train_years,
+        self.train_dataset = ContrastiveDataset(
+            dataset_path=self.dataset_path / "train.zarr",
         )
-        self.val_dataset = ValContrastiveDataset(
-            dataset_path=self.dataset_path,
-            train_years=self.train_years,
-            heldout_years=self.val_years,
+        self.val_dataset = ContrastiveDataset(
+            dataset_path=self.dataset_path / "validation.zarr",
         )
 
-        self.test_dataset = ValContrastiveDataset(
-            dataset_path=self.dataset_path,
-            train_years=self.train_years,
-            heldout_years=self.test_years,
+        self.test_dataset = ContrastiveDataset(
+            dataset_path=self.dataset_path / "test.zarr",
         )
 
     def train_dataloader(self):
@@ -276,7 +169,7 @@ class ContrastiveDataModule(LightningDataModule):
             collate_fn=safe_collate,
             pin_memory=True,
         )
-        return NonNoneDataLoader(loader)
+        return loader  # NonNoneDataLoader(loader)
 
 
 class NonNoneDataLoader:

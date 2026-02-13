@@ -1,11 +1,11 @@
-from pytorch_lightning import Trainer
 import torch
+
+from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from data import ContrastiveDataModule
 from models import TimeSeriesTransformerEncoder
 from train import ContrastiveTrainingModule
-from loss import info_nce_loss
 
 
 def main():
@@ -15,15 +15,12 @@ def main():
     # DataModule / Dataloader
     # -----------------------------
 
-    dataset_path = "/Net/Groups/BGI/work_2/scratch/DeepExtremes/dx-minicubes/full/"
+    dataset_path = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/datasets/"
 
     datamodule = ContrastiveDataModule(
         dataset_path=dataset_path,
         batch_size=1,
         num_workers=16,
-        training_years=range(2016, 2023),
-        test_years=[2020, 2021],  # last year held out
-        val_years=[2020, 2021],  # last year held out
     )
     datamodule.setup()
 
@@ -47,12 +44,11 @@ def main():
         accumulate_grad_batches=16,
         log_every_n_steps=16,
         gradient_clip_val=1.0,
-        profiler="advanced",
+        profiler="simple",
+        auto_lr_find=True,
     )
 
     trainer.fit(contrastive_model, datamodule=datamodule)
-
-    train_loader = datamodule.train_dataloader()
 
     torch.save(
         {

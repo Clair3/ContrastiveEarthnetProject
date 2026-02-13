@@ -18,7 +18,9 @@ class BatchSampler(Sampler):
     def __init__(self, dataset, shuffle=True):
         # build data for sampling here
         self.shuffle = shuffle
-        self.batch_to_indices = self.batch_years(sample_years=dataset.training_pairs)
+        self.batch_to_indices = self.batch_years(loc_year_pairs=dataset.training_pairs)
+        print(f"Built BatchSampler with {len(self.batch_to_indices)} batches.")
+        print(self.batch_to_indices)
         self.batch_ids = list(self.batch_to_indices.keys())
 
     def __iter__(self):
@@ -30,8 +32,8 @@ class BatchSampler(Sampler):
     def __len__(self):
         return len(self.batch_ids)
 
-    def batch_years(self, sample_years):
+    def batch_years(self, loc_year_pairs):
         batch_to_indices = defaultdict(list)
-        for idx, (path, year) in enumerate(sample_years):
-            batch_to_indices[path].append(idx)
+        for idx, (location, year) in enumerate(loc_year_pairs):
+            batch_to_indices[location].append(idx)
         return batch_to_indices
