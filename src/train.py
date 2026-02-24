@@ -1,16 +1,23 @@
 from torch import optim
 from pytorch_lightning import LightningModule
-import torch
-from models import TimeSeriesTransformerEncoder
 from loss import info_nce_loss
+import torch.nn.functional as F
 
 
 class ContrastiveTrainingModule(LightningModule):
-    def __init__(self, encoder_veg, encoder_weather, lr=5e-5):
+    def __init__(
+        self,
+        encoder_veg,
+        encoder_weather,
+        lr=3e-4,
+        temperature=0.07,
+    ):
         super().__init__()
+        self.save_hyperparameters(ignore=["encoder_veg", "encoder_weather"])
         self.encoder_veg = encoder_veg
         self.encoder_weather = encoder_weather
         self.lr = lr
+        self.temperature = temperature
 
     def forward(self, vegetation, weather):
         veg_emb = self.encoder_veg(vegetation)
@@ -28,7 +35,12 @@ class ContrastiveTrainingModule(LightningModule):
         weather = batch["weather"]
 
         veg_emb, weather_emb = self(vegetation, weather)
-        loss = info_nce_loss(veg_emb, weather_emb)
+        loss = info_nce_loss(veg_emb, weather_emb, temperature=self.temperature)
+
+        self.log("veg_emb_std", veg_emb.std(), on_step=True)
+        self.log("weather_emb_std", weather_emb.std(), on_step=True)
+        self.log("veg_emb_mean", veg_emb.mean().abs(), on_step=True)
+
         self.log(
             "train_loss",
             loss,
@@ -46,7 +58,7 @@ class ContrastiveTrainingModule(LightningModule):
         vegetation = batch["vegetation"]
         weather = batch["weather"]
         veg_emb, weather_emb = self(vegetation, weather)
-        loss = info_nce_loss(veg_emb, weather_emb)
+        loss = info_nce_loss(veg_emb, weather_emb, self.temperature)
         self.log(
             "val_loss",
             loss,

@@ -1,8 +1,4 @@
 from torch.utils.data.sampler import Sampler
-import xarray as xr
-import numpy as np
-from datetime import datetime, timedelta
-import pandas as pd
 import random
 from collections import defaultdict
 

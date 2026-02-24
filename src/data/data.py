@@ -1,13 +1,12 @@
-from pytorch_lightning import LightningDataModule
-from torch.utils.data.dataloader import default_collate
-import torch
-from torch.utils.data import Dataset, DataLoader
 import xarray as xr
 import logging
-import pandas as pd
 from pathlib import Path
 import numpy as np
-import random
+import torch
+
+from pytorch_lightning import LightningDataModule
+from torch.utils.data.dataloader import default_collate
+from torch.utils.data import Dataset, DataLoader
 
 from .batch_sampler import BatchSampler
 
@@ -24,27 +23,25 @@ class ContrastiveDataset(Dataset):
     def __init__(self, dataset_path):
         self.dataset = xr.open_zarr(dataset_path)
         samples_ids = self.dataset.sample.values.tolist()
-        self.years = self.dataset.time_veg.dt.year.values.tolist()
-        self.training_pairs = self._list_pairs(samples_ids, self.years)[:100]
+        self.years = np.unique(self.dataset.time_veg.dt.year.values)
+        self.training_pairs = self._list_pairs(samples_ids, self.years)
         self.sentinel2_variables = [
             "evi",  # Enhanced Vegetation Index
         ]
         self.era5_variables = [
             "t2m_mean",  # 2-meter air temperature
-            # "tp_mean",  # Total precipitation
-            # "t2m_min",
-            # "tp_min",
-            # "t2m_max",
+            "tp_mean",  # Total precipitation
+            "t2m_min",
+            "tp_min",
+            "t2m_max",
             "tp_max",
-            # "pev_mean",  # Potential evapotranspiration
-            # "ssr_mean",  # Surface solar radiation
-            # "pev_min",
-            # "ssr_min",
-            # "pev_max",
-            # "ssr_max",
+            "pev_mean",  # Potential evapotranspiration
+            "ssr_mean",  # Surface solar radiation
+            "pev_min",
+            "ssr_min",
+            "pev_max",
+            "ssr_max",
         ]
-        self.temporal_resolution_veg = 16
-        self.temporal_resolution_weather = 5
 
     def _list_pairs(self, sample_ids, years):
         # Precompute valid (sample, year) pairs
@@ -68,8 +65,6 @@ class ContrastiveDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict | None:
         sample_id, year = self.training_pairs[idx]
-        print(f"Loading sample {sample_id} for year {year}")
-
         try:
             sample = self.dataset.sel(
                 sample=sample_id,
@@ -95,7 +90,7 @@ class ContrastiveDataset(Dataset):
             return data
 
         except Exception as e:
-            logging.warning(f"Skipping {sample_id}: {e}")
+            # logging.warning(f"Skipping {sample_id}: {e}")
             return None
 
 
@@ -107,7 +102,7 @@ class ContrastiveDataModule(LightningDataModule):
     def __init__(
         self,
         dataset_path,
-        batch_size=8,
+        batch_size=16,
         num_workers=16,
     ):
         """
@@ -119,7 +114,6 @@ class ContrastiveDataModule(LightningDataModule):
         self.dataset_path = Path(dataset_path)
 
     def setup(self, stage=None):
-
         self.train_dataset = ContrastiveDataset(
             dataset_path=self.dataset_path / "train.zarr",
         )
@@ -134,10 +128,11 @@ class ContrastiveDataModule(LightningDataModule):
     def train_dataloader(self):
         loader = DataLoader(
             self.train_dataset,
-            batch_sampler=BatchSampler(
-                dataset=self.train_dataset,
-                shuffle=True,
-            ),
+            batch_size=self.batch_size,
+            # batch_sampler=BatchSampler(
+            #     dataset=self.train_dataset,
+            #     shuffle=True,
+            # ),
             collate_fn=safe_collate,
             num_workers=self.num_workers,
             pin_memory=True,
@@ -148,46 +143,35 @@ class ContrastiveDataModule(LightningDataModule):
     def val_dataloader(self):
         loader = DataLoader(
             self.val_dataset,
-            batch_sampler=BatchSampler(
-                dataset=self.val_dataset,
-                shuffle=True,
-            ),
+            batch_size=self.batch_size,
+            # batch_sampler=BatchSampler(
+            #     dataset=self.val_dataset,
+            #     shuffle=True,
+            # ),
             num_workers=self.num_workers,
             collate_fn=safe_collate,
             pin_memory=True,
         )
-        return loader  # NonNoneDataLoader(loader)
+        return loader
 
     def test_dataloader(self):
         loader = DataLoader(
             self.test_dataset,
-            batch_sampler=BatchSampler(
-                dataset=self.test_dataset,
-                shuffle=True,
-            ),
+            batch_size=self.batch_size,
+            # batch_sampler=BatchSampler(
+            #     dataset=self.test_dataset,
+            #     shuffle=True,
+            # ),
             num_workers=self.num_workers,
             collate_fn=safe_collate,
             pin_memory=True,
         )
-        return loader  # NonNoneDataLoader(loader)
-
-
-class NonNoneDataLoader:
-    def __init__(self, loader):
-        self.loader = loader
-
-    def __iter__(self):
-        for batch in self.loader:
-            if batch is not None:
-                yield batch
-
-    def __len__(self):
-        return len(self.loader)
+        return loader
 
 
 def safe_collate(batch):
     # Remove any None entries
-    batch = [b for b in batch if b is not None]
+    batch = [sample for sample in batch if sample is not None]
     if len(batch) == 0:
-        return None  # whole batch invalid TÓDO improve
+        return None
     return default_collate(batch)
