@@ -27,8 +27,6 @@ import xarray as xr
 
 # Local imports - adapt import paths as needed
 from process_vegetation import Sentinel2Preprocessing
-from process_weather import weather_normalization
-
 
 logger = logging.getLogger("process_train_dataset")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -73,7 +71,8 @@ class ProcessTrainDataset:
 
         ds = xr.open_zarr(sample_path)
         vegetation = self._process_vegetation(ds).rename({"time": "time_veg"})
-        weather = self._process_weather(ds).rename({"time": "time_weather"})
+        # weather = self._process_weather(ds).rename({"time": "time_weather"})
+        weather = ds[self.era5_variables].rename({"time": "time_weather"})
 
         vegetation = self.reindex_all_years(
             vegetation,
@@ -115,7 +114,7 @@ class ProcessTrainDataset:
             lat = ds.latitude.item()
             lon = ds.longitude.item()
 
-            out_name = f"{path.stem}_{lat:.3f}_{lon:.3f}.zarr"
+            out_name = f"{path.stem}_{lat:.5f}_{lon:.5f}.zarr"
             out_path = self.output_dir / out_name
             logger.info(f"Writing {out_path}")
             ds.to_zarr(store=str(out_path), mode="w")
@@ -135,10 +134,10 @@ class ProcessTrainDataset:
             raise ValueError("Vegetation index computation failed")
         return veg_index
 
-    def _process_weather(self, ds: xr.Dataset) -> xr.DataArray:
-        weather = ds[self.era5_variables]
-        weather = weather_normalization(weather)
-        return weather
+    # def _process_weather(self, ds: xr.Dataset) -> xr.DataArray:
+    #     weather = ds[self.era5_variables]
+    #     weather = weather_normalization(weather)
+    #     return weather
 
     def reindex_all_years(self, data, temporal_resolution=16, time_var="time"):
         # Get all unique years
@@ -157,7 +156,7 @@ class ProcessTrainDataset:
                 reindexed_years.append(reindexed_year)
 
         # Concatenate all years along the time dimension
-        data_all_years = xr.concat(reindexed_years, dim="year")
+        data_all_years = xr.concat(reindexed_years, dim=time_var)
         return data_all_years
 
 
@@ -190,7 +189,6 @@ def select_year(
         method="nearest",
         tolerance=tol,
     )
-    data_year = data_year.assign_coords(year=selected_year)
     if data_year[time_var].isnull().any():
         return None  # year could not be properly reindexed
     return data_year
