@@ -2,6 +2,7 @@ from torch import optim
 from pytorch_lightning import LightningModule
 from loss import info_nce_loss
 import torch.nn.functional as F
+import torch.nn as nn
 
 
 class ContrastiveTrainingModule(LightningModule):
@@ -17,7 +18,9 @@ class ContrastiveTrainingModule(LightningModule):
         self.encoder_veg = encoder_veg
         self.encoder_weather = encoder_weather
         self.lr = lr
-        self.temperature = temperature
+        self.loss_fn = lambda veg, weather: info_nce_loss(
+            veg, weather, temperature=temperature
+        )
 
     def forward(self, vegetation, weather):
         veg_emb = self.encoder_veg(vegetation)
@@ -35,12 +38,11 @@ class ContrastiveTrainingModule(LightningModule):
         weather = batch["weather"]
 
         veg_emb, weather_emb = self(vegetation, weather)
-        loss = info_nce_loss(veg_emb, weather_emb, temperature=self.temperature)
+        loss = self.loss_fn(veg_emb, weather_emb)
 
         self.log("veg_emb_std", veg_emb.std(), on_step=True)
         self.log("weather_emb_std", weather_emb.std(), on_step=True)
         self.log("veg_emb_mean", veg_emb.mean().abs(), on_step=True)
-
         self.log(
             "train_loss",
             loss,
@@ -53,13 +55,12 @@ class ContrastiveTrainingModule(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         if batch == None:
-            print(f"Validation step {batch_idx} skipped due to empty batch.")
             return None  # skip this batch
 
         vegetation = batch["vegetation"]
         weather = batch["weather"]
         veg_emb, weather_emb = self(vegetation, weather)
-        loss = info_nce_loss(veg_emb, weather_emb, self.temperature)
+        loss = self.loss_fn(veg_emb, weather_emb)
         self.log(
             "val_loss",
             loss,
@@ -71,9 +72,58 @@ class ContrastiveTrainingModule(LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(
+        return optim.Adam(
             list(self.encoder_veg.parameters())
             + list(self.encoder_weather.parameters()),
             lr=self.lr,
         )
-        return optimizer
+
+
+class ForecastingTrainModule(LightningModule):
+    """
+    LightningModule for vegetation forecasting.
+    """
+
+    def __init__(self, model, lr=3e-4):
+        super().__init__(lr=lr)
+        self.model = model
+        self.loss_fn = nn.MSELoss()
+
+    def forward(self, batch):
+        return self.model(batch)
+
+    def training_step(self, batch, batch_idx):
+        if batch is None:
+            self.log(
+                "train_loss", float("nan"), on_step=True, on_epoch=True, prog_bar=True
+            )
+            return None
+
+        y_pred = self(batch)
+        y_true = batch["vegetation_forecast"]
+        loss = self.loss_fn(y_pred, y_true)
+        self.log(
+            "train_loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=y_true.shape[0],
+        )
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        if batch is None:
+            return None
+        y_pred = self(batch)
+        y_true = batch["vegetation_forecast"]
+        loss = self.loss_fn(y_true, y_true)
+        self.log(
+            "val_loss",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=y_true.shape[0],
+        )
+        return loss
