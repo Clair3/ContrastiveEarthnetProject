@@ -1,1 +1,1 @@
-from .data import ContrastiveDataModule
+from .datamodules import ContrastiveDataModule

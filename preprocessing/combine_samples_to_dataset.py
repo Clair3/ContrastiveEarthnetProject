@@ -138,6 +138,8 @@ def main():
     INPUT_DIR = "datasets/samples"
     OUTPUT_DIR = "datasets"
     SCRATCH_DIR = Path("/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject")
+    VALIDATION_YEAR = 2020
+    TEST_YEAR = 2021
 
     WEATHER_VARS = [
         "t2m_mean",
@@ -160,7 +162,7 @@ def main():
 
     # Split by year (this expands locations into location-year samples)
     print("\n=== Splitting by year ===")
-    train, val, test = split_dataset(combined)
+    train, val, test = split_dataset(combined, val_year=VALIDATION_YEAR, test_year=TEST_YEAR)
 
     # Normalize weather variables
     print("\n=== Normalizing weather variables ===")
@@ -187,7 +189,7 @@ def main():
                 "rsync",
                 "-a",
                 str(train_path),
-                str(os.path.join(SCRATCH_DIR, train_path)),
+                str(os.path.join(SCRATCH_DIR, OUTPUT_DIR)),
             ],
             check=True,
         )
@@ -200,7 +202,7 @@ def main():
                 "rsync",
                 "-a",
                 str(val_path),
-                str(os.path.join(SCRATCH_DIR, val_path)),
+                str(os.path.join(SCRATCH_DIR, OUTPUT_DIR)),
             ],
             check=True,
         )
@@ -212,7 +214,7 @@ def main():
                 "rsync",
                 "-a",
                 str(test_path),
-                str(os.path.join(SCRATCH_DIR, test_path)),
+                str(os.path.join(SCRATCH_DIR, OUTPUT_DIR)),
             ],
             check=True,
         )
