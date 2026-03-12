@@ -53,6 +53,7 @@ class ContrastiveTrainingModule(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         if batch == None:
+            print(f"Validation step {batch_idx} skipped due to empty batch.")
             return None  # skip this batch
 
         vegetation = batch["vegetation"]

@@ -7,6 +7,7 @@ import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data import Dataset, DataLoader
+import pandas as pd
 
 from .batch_sampler import BatchSampler
 
@@ -20,36 +21,45 @@ class ContrastiveDataset(Dataset):
         - negative: another year of same location
     """
 
-    def __init__(self, dataset_path):
-        self.dataset = xr.open_zarr(dataset_path)
-        samples_ids = self.dataset.sample.values.tolist()
-        self.years = np.unique(self.dataset.time_veg.dt.year.values)
-        self.training_pairs = self._list_pairs(samples_ids, self.years)
-        self.sentinel2_variables = [
-            "evi",  # Enhanced Vegetation Index
-        ]
-        self.era5_variables = [
-            "t2m_mean",  # 2-meter air temperature
-            "tp_mean",  # Total precipitation
-            "t2m_min",
-            "tp_min",
-            "t2m_max",
-            "tp_max",
-            "pev_mean",  # Potential evapotranspiration
-            "ssr_mean",  # Surface solar radiation
-            "pev_min",
-            "ssr_min",
-            "pev_max",
-            "ssr_max",
-        ]
+    def __init__(self, dataset_path: str, sentinel2_vars: list, era5_vars: list):
+        self.dataset = xr.open_zarr(dataset_path, consolidated=True)
+        print(self.dataset)
+        print(self.dataset.chunks)
+        self.sentinel2_vars = sentinel2_vars
+        self.era5_vars = era5_vars
 
-    def _list_pairs(self, sample_ids, years):
-        # Precompute valid (sample, year) pairs
+        # Create training pairs
+        self.training_pairs = self._create_training_pairs()
+
+        # Pre-compute year masks once during init
+        self._precompute_year_indices()
+
+    def _create_training_pairs(self):
+        """Create list of (sample_id, year) pairs."""
         pairs = []
-        for sample_id in sample_ids:
+        years = np.unique(self.dataset.time_veg.dt.year.values)
+        for sample_id in range(len(self.dataset.sample[:100])):
             for year in years:
                 pairs.append((sample_id, year))
+
         return pairs
+
+    def _precompute_year_indices(self):
+        """Pre-compute which time indices belong to each year."""
+
+        # Extract year for each timestamp
+        veg_years = pd.DatetimeIndex(self.dataset.time_veg.values).year
+
+        # Create a dictionary mapping year → array of indices
+        self.veg_year_masks = {}
+        for year in np.unique(veg_years):
+            self.veg_year_masks[year] = np.where(veg_years == year)[0]
+
+        # Same for weather data
+        weather_years = pd.DatetimeIndex(self.dataset.time_weather.values).year
+        self.weather_year_masks = {}
+        for year in np.unique(weather_years):
+            self.weather_year_masks[year] = np.where(weather_years == year)[0]
 
     def __len__(self):
         return len(self.training_pairs)
@@ -61,19 +71,24 @@ class ContrastiveDataset(Dataset):
 
         if torch.isnan(arr).all() or torch.isinf(arr).any():
             raise ValueError("Tensor contains only NaNs or infs")
-        return arr.permute(1, 0)  # now [T, C]
+        return arr.permute(1, 0)  # shape [time, variables]
 
     def __getitem__(self, idx: int) -> dict | None:
         sample_id, year = self.training_pairs[idx]
         try:
-            sample = self.dataset.sel(
+            sample = self.dataset.isel(
                 sample=sample_id,
             )
-            vegetation = sample[self.sentinel2_variables].sel(
-                time_veg=sample.time_veg.dt.year == int(year)
+
+            veg_indices = self.veg_year_masks[year]
+            weather_indices = self.weather_year_masks[year]
+
+            vegetation = ds[self.sentinel2_vars].isel(
+                sample=sample_id, time_veg=veg_indices
             )
-            weather = sample[self.era5_variables].sel(
-                time_weather=sample.time_weather.dt.year == int(year)
+
+            weather = ds[self.era5_vars].isel(
+                sample=sample_id, time_weather=weather_indices
             )
 
             vegetation_location = (
@@ -86,7 +101,6 @@ class ContrastiveDataset(Dataset):
                 "weather": self._to_tensor(weather),
                 "location": vegetation_location,
             }
-
             return data
 
         except Exception as e:
@@ -101,7 +115,7 @@ class ContrastiveDataModule(LightningDataModule):
 
     def __init__(
         self,
-        dataset_path,
+        data_config,
         batch_size=16,
         num_workers=16,
     ):
@@ -111,18 +125,25 @@ class ContrastiveDataModule(LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.dataset_path = Path(dataset_path)
+        self.dataset_path = Path(data_config["dataset"]["path"])
+        self.data_config = data_config
 
     def setup(self, stage=None):
         self.train_dataset = ContrastiveDataset(
-            dataset_path=self.dataset_path / "train.zarr",
+            dataset_path=self.dataset_path / "train_old.zarr",
+            sentinel2_vars=self.data_config["vegetation"]["variables"],
+            era5_vars=self.data_config["weather"]["variables"],
         )
         self.val_dataset = ContrastiveDataset(
-            dataset_path=self.dataset_path / "validation.zarr",
+            dataset_path=self.dataset_path / "validation_old.zarr",
+            sentinel2_vars=self.data_config["vegetation"]["variables"],
+            era5_vars=self.data_config["weather"]["variables"],
         )
 
         self.test_dataset = ContrastiveDataset(
-            dataset_path=self.dataset_path / "test.zarr",
+            dataset_path=self.dataset_path / "test_old.zarr",
+            sentinel2_vars=self.data_config["vegetation"]["variables"],
+            era5_vars=self.data_config["weather"]["variables"],
         )
 
     def train_dataloader(self):
@@ -135,6 +156,7 @@ class ContrastiveDataModule(LightningDataModule):
             # ),
             collate_fn=safe_collate,
             num_workers=self.num_workers,
+            persistent_workers=True,
             pin_memory=True,
         )
 

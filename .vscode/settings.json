@@ -1,5 +1,7 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python-envs.pythonProjects": []
+    "python.condaPath": "/Net/Groups/BGI/scratch/crobin/miniconda3/bin/conda",
+    "python.venvPath": "/Net/Groups/BGI/scratch/crobin/miniconda3/envs",
+    "python.formatting.provider": "black",
+    "editor.formatOnSave": true
 }
+

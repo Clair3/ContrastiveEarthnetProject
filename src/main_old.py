@@ -15,8 +15,6 @@ def main():
     # DataModule / Dataloader
     # -----------------------------
 
-    dataset_path = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/datasets/"
-
     datamodule = ContrastiveDataModule(
         dataset_path=dataset_path,
         batch_size=128,

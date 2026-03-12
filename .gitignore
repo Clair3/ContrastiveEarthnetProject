@@ -5,12 +5,17 @@
 *.err
 *.txt
 *.log
+*.ckpt
+*.sh
+*.yaml
 
 
 # TensorBoard / experiment logs
 runs/
 preprocessing/logs/
 preprocessing/datasets
+wandb/
+logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
