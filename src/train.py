@@ -117,7 +117,7 @@ class ForecastingTrainModule(LightningModule):
             return None
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
-        loss = self.loss_fn(y_true, y_true)
+        loss = self.loss_fn(y_true, y_pred)
         self.log(
             "val_loss",
             loss,

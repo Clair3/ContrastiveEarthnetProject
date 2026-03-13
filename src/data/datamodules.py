@@ -36,7 +36,7 @@ class ContrastiveDataModule(LightningDataModule):
 
     def _build_dataset(self, split):
         return ContrastiveDataset(
-            dataset_path=self.dataset_path / f"{split}_10.zarr",
+            dataset_path=self.dataset_path / f"{split}.zarr",
             sentinel2_vars=self.data_config["vegetation"]["variables"],
             era5_vars=self.data_config["weather"]["variables"],
         )

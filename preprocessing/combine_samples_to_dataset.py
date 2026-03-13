@@ -142,17 +142,17 @@ def main():
     TEST_YEAR = 2021
 
     WEATHER_VARS = [
-        "t2m_mean",
+        # "t2m_mean",
         "t2m_min",
         "t2m_max",
-        "tp_mean",
-        "tp_min",
+        # "tp_mean",
+        # "tp_min",
         "tp_max",
         "pev_mean",
-        "pev_min",
+        # "pev_min",
         "pev_max",
         "ssr_mean",
-        "ssr_min",
+        # "ssr_min",
         "ssr_max",
     ]
 
@@ -162,7 +162,9 @@ def main():
 
     # Split by year (this expands locations into location-year samples)
     print("\n=== Splitting by year ===")
-    train, val, test = split_dataset(combined, val_year=VALIDATION_YEAR, test_year=TEST_YEAR)
+    train, val, test = split_dataset(
+        combined, val_year=VALIDATION_YEAR, test_year=TEST_YEAR
+    )
 
     # Normalize weather variables
     print("\n=== Normalizing weather variables ===")

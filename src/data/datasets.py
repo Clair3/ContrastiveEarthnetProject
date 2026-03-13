@@ -95,17 +95,18 @@ class ContrastiveDataset(BaseDataset):
                 sample.longitude.values.item(),
             )
 
-            return {
+            data = {
                 "vegetation": self._to_tensor(vegetation),
                 "weather": self._to_tensor(weather),
                 "location": vegetation_location,
             }
+            return data
         except Exception as e:
-            logging.warning(f"Skipping {sample_id}: {e}")
+            # logging.warning(f"Skipping {sample_id}: {e}")
             return None
 
 
-class ForecastingDataset(BaseTimeSeriesDataset):
+class ForecastingDataset(BaseDataset):
 
     def __init__(self, dataset_path, sentinel2_vars, era5_vars):
 

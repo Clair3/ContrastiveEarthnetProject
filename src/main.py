@@ -20,9 +20,15 @@ from pytorch_lightning.callbacks import (
     LearningRateMonitor,
 )
 
-from data import ContrastiveDataModule
-from models import TimeSeriesTransformerEncoder
-from train import ContrastiveTrainingModule
+from data import ContrastiveDataModule, ForecastingDataModule
+from train import ContrastiveTrainingModule, ForecastingTrainModule
+from models import (
+    TimeSeriesTransformerEncoder,
+    LSTM,
+    PersistenceBaseline,
+    SeasonalBaseline,
+)
+
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 CONFIG_DIR = SCRIPT_DIR / "configs"
@@ -34,54 +40,158 @@ def load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def build_model(config, data_config):
-    """Instantiate encoders and the Lightning module from a W&B config object."""
-    encoder_veg = TimeSeriesTransformerEncoder(
-        input_dim=len(data_config["vegetation"]["variables"]),
-        sequence_length=data_config["vegetation"]["sequence_length"],
-        d_model=config.d_model,
-    )
-    encoder_weather = TimeSeriesTransformerEncoder(
-        input_dim=len(data_config["weather"]["variables"]),
-        sequence_length=data_config["weather"]["sequence_length"],
-        d_model=config.d_model,
-    )
-    model = ContrastiveTrainingModule(
-        encoder_veg=encoder_veg,
-        encoder_weather=encoder_weather,
-        lr=float(config.lr),
-        temperature=config.temperature,
-    )
-    return model, encoder_veg, encoder_weather
+class BaseExperiment:
+    def __init__(self, config, data_config, train_config):
+        self.config = config
+        self.data_config = data_config
+        self.train_config = train_config
+
+    def build_datamodule(self):
+        raise NotImplementedError
+
+    def build_model(self):
+        raise NotImplementedError
+
+    def build_callbacks(self, run_id):
+        os.makedirs("checkpoints", exist_ok=True)
+
+        checkpoint = ModelCheckpoint(
+            dirpath=os.path.join("checkpoints", run_id),
+            filename="epoch={epoch:02d}-val_loss={val_loss:.4f}",
+            monitor="val_loss",
+            mode="min",
+            save_top_k=1,
+            auto_insert_metric_name=False,
+        )
+
+        early_stop = EarlyStopping(
+            monitor="val_loss",
+            patience=5,
+            mode="min",
+        )
+
+        lr_monitor = LearningRateMonitor(logging_interval="epoch")
+
+        return [checkpoint, early_stop, lr_monitor]
+
+    def run(self):
+
+        datamodule = self.build_datamodule()
+        model = self.build_model()
+        logger = WandbLogger(
+            project="contrastive-earthnet", config=self.config, log_model="best"
+        )
+
+        trainer = Trainer(
+            max_epochs=self.config.max_epochs,
+            accelerator="gpu",
+            devices=1,
+            precision=self.train_config["system"]["precision"],
+            logger=logger,
+            callbacks=self.build_callbacks(wandb.run.id),
+            log_every_n_steps=16,
+            gradient_clip_val=1.0,
+            deterministic=True,
+            profiler="simple",
+            enable_progress_bar=True,
+        )
+
+        trainer.fit(model, datamodule)
+        trainer.test(model, datamodule)
 
 
-def build_callbacks(run_id: str):
-    """Standard set of training callbacks."""
-    os.makedirs("checkpoints", exist_ok=True)
-    checkpoint = ModelCheckpoint(
-        dirpath=os.path.join("checkpoints", run_id),
-        filename="epoch={epoch:02d}-val_loss={val_loss:.4f}",
-        monitor="val_loss",
-        mode="min",
-        save_top_k=1,
-        auto_insert_metric_name=False,
-    )
-    early_stop = EarlyStopping(
-        monitor="val_loss",
-        patience=5,
-        mode="min",
-        verbose=True,
-    )
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
-    return [checkpoint, early_stop, lr_monitor]
+class ContrastiveExperiment(BaseExperiment):
+
+    def build_datamodule(self):
+        return ContrastiveDataModule(
+            data_config=self.data_config,
+            batch_size=self.config.batch_size,
+            num_workers=self.train_config["system"]["num_workers"],
+        )
+
+    def build_model(self):
+        encoder_veg = TimeSeriesTransformerEncoder(
+            input_dim=len(self.data_config["vegetation"]["variables"]),
+            sequence_length=self.data_config["vegetation"]["sequence_length"],
+            d_model=self.config.d_model,
+        )
+
+        encoder_weather = TimeSeriesTransformerEncoder(
+            input_dim=len(self.data_config["weather"]["variables"]),
+            sequence_length=self.data_config["weather"]["sequence_length"],
+            d_model=self.config.d_model,
+        )
+
+        self.encoder_veg = encoder_veg
+        self.encoder_weather = encoder_weather
+
+        return ContrastiveTrainingModule(
+            encoder_veg=encoder_veg,
+            encoder_weather=encoder_weather,
+            lr=self.config.lr,  # float() to ensure it's a native Python float for WandB logging
+            temperature=self.config.temperature,
+        )
+
+    def run(self):
+
+        super().run()
+
+        save_path = os.path.join("checkpoints", f"{wandb.run.id}_final.pth")
+
+        torch.save(
+            {
+                "encoder_veg": self.encoder_veg.state_dict(),
+                "encoder_weather": self.encoder_weather.state_dict(),
+                "config": dict(self.config),
+                "run_id": wandb.run.id,
+            },
+            save_path,
+        )
+
+
+class ForecastingExperiment(BaseExperiment):
+
+    def build_datamodule(self):
+
+        return ForecastingDataModule(
+            data_config=self.data_config,
+            batch_size=self.config.batch_size,
+            num_workers=self.train_config["system"]["num_workers"],
+        )
+
+    def build_model(self):
+
+        model = LSTM(
+            veg_dim=len(self.data_config["vegetation"]["variables"]),
+            weather_dim=len(self.data_config["weather"]["variables"]),
+            hidden_dim=self.config.hidden_dim,
+        )
+
+        return ForecastingTrainModule(
+            model=model,
+            lr=self.config.lr,
+        )
+
+    def run(self):
+
+        super().run()
+
+        save_path = os.path.join("checkpoints", f"{wandb.run.id}_final.pth")
+
+        torch.save(
+            {
+                "model": self.model.state_dict(),
+                "config": dict(self.config),
+                "run_id": wandb.run.id,
+            },
+            save_path,
+        )
 
 
 def run():
-    """Main training function."""
-
-    # Load configs
     data_config = load_config(CONFIG_DIR / "data_config.yaml")
     train_config = load_config(CONFIG_DIR / "train_config.yaml")
+
     default_config = {
         **train_config["model"],
         **train_config["training"],
@@ -89,65 +199,26 @@ def run():
 
     seed_everything(train_config["system"]["seed"], workers=True)
 
-    # Initialize W&B (automatically handles sweep params)
-    wandb.init(project="contrastive-earthnet", config=default_config)
+    wandb.init(
+        project="contrastive-earthnet",
+        config=default_config,
+    )
+
     config = wandb.config
 
-    print(f"\nTraining with:")
-    print(f"  lr: {config.lr}")
-    print(f"  d_model: {config.d_model}")
-    print(f"  batch_size: {config.batch_size}")
-    print(f"  temperature: {config.temperature}")
-    print(f"  Sweep mode: {os.environ.get('WANDB_SWEEP_ID') is not None}")
+    mode = train_config["experiment"]["mode"]
 
-    # ── Logger ────────────────────────────────
-    logger = WandbLogger(log_model="best")
+    if mode == "contrastive":
+        experiment = ContrastiveExperiment(config, data_config, train_config)
 
-    # ── Data ──────────────────────────────────
-    datamodule = ContrastiveDataModule(
-        data_config=data_config,
-        batch_size=config.batch_size,
-        num_workers=train_config["system"]["num_workers"],
-    )
+    elif mode == "forecasting":
+        pass
+        experiment = ForecastingExperiment(config, data_config, train_config)
 
-    # ── Model ─────────────────────────────────
-    model, encoder_veg, encoder_weather = build_model(config, data_config)
+    else:
+        raise ValueError(f"Unknown experiment mode: {mode}")
 
-    # ── Trainer ───────────────────────────────
-    # Effective batch size is kept roughly constant across batch_size values
-    # by adjusting gradient accumulation steps.
-    # TARGET_EFFECTIVE_BATCH = 256
-    # accumulate = max(1, TARGET_EFFECTIVE_BATCH // config.batch_size)
-
-    trainer = Trainer(
-        max_epochs=config.max_epochs,
-        accelerator="gpu",
-        devices=1,
-        precision=train_config["system"]["precision"],
-        logger=logger,
-        callbacks=build_callbacks(wandb.run.id),
-        log_every_n_steps=16,
-        gradient_clip_val=1.0,
-        # accumulate_grad_batches=accumulate,
-        deterministic=True,
-        profiler="simple",
-        enable_progress_bar=True,
-    )
-
-    trainer.fit(model, datamodule=datamodule)
-
-    # ── Save weights ──────────────────────────
-    save_path = os.path.join("checkpoints", f"{wandb.run.id}_final.pth")
-    torch.save(
-        {
-            "encoder_veg": encoder_veg.state_dict(),
-            "encoder_weather": encoder_weather.state_dict(),
-            "config": dict(config),
-            "run_id": wandb.run.id,
-        },
-        save_path,
-    )
-    print(f"Weights saved → {save_path}")
+    experiment.run()
 
     wandb.finish()
 
