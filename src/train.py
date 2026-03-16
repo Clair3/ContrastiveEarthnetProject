@@ -71,6 +71,9 @@ class ContrastiveTrainingModule(LightningModule):
         )
         return loss
 
+    def test_step(self, batch, batch_idx):
+        return self.validation_step(batch, batch_idx)
+
     def configure_optimizers(self):
         return optim.Adam(
             list(self.encoder_veg.parameters())
@@ -127,3 +130,6 @@ class ForecastingTrainModule(LightningModule):
             batch_size=y_true.shape[0],
         )
         return loss
+
+    def test_step(self, batch, batch_idx):
+        return self.validation_step(batch, batch_idx)

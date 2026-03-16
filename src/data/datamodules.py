@@ -59,6 +59,7 @@ class ContrastiveDataModule(LightningDataModule):
             collate_fn=safe_collate,
             pin_memory=True,
             persistent_workers=self.num_workers > 0,
+            pin_memory=True,
         )
 
     def train_dataloader(self):

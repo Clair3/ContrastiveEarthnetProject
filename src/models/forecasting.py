@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
-from encoders import TimeSeriesTransformerEncoder
+from .encoders import TimeSeriesTransformerEncoder
 
 
 class PersistenceBaseline(nn.Module):
+    def __init__(self, veg_dim, weather_dim, config):
+        super().__init__()
 
     def forward(self, batch):
         veg_history = batch["vegetation_history"]
@@ -15,11 +17,10 @@ class SeasonalBaseline(nn.Module):
 
 
 class LSTM(nn.Module):
-    # Todo: maybe auto encoder with 4 LTSM layers, then a linear head to predict the next time step
-
-    def __init__(self, veg_dim, weather_dim, hidden_dim):
+    def __init__(self, veg_dim, weather_dim, config):
 
         super().__init__()
+        hidden_dim = config.hidden_dim
 
         self.lstm = nn.LSTM(
             veg_dim + weather_dim,
@@ -53,8 +54,11 @@ class TransformerForecast(nn.Module):
 
     def forward(self, batch):
 
-        veg = batch["vegetation_history"]
-        weather = batch["weather_history"]
+        veg_history = batch["vegetation_history"]
+        weather_history = batch["weather_history"]
+        weather_future = batch["weather_future"]
+        emb_veg = self.encoder(veg)
+        emb_weather = self.encoder(weather)
 
         x = torch.cat([veg, weather], dim=-1)
 

@@ -22,12 +22,7 @@ from pytorch_lightning.callbacks import (
 
 from data import ContrastiveDataModule, ForecastingDataModule
 from train import ContrastiveTrainingModule, ForecastingTrainModule
-from models import (
-    TimeSeriesTransformerEncoder,
-    LSTM,
-    PersistenceBaseline,
-    SeasonalBaseline,
-)
+from models import TimeSeriesTransformerEncoder, ModelClass
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -41,10 +36,9 @@ def load_config(config_path: str) -> dict:
 
 
 class BaseExperiment:
-    def __init__(self, config, data_config, train_config):
+    def __init__(self, config, data_config):
         self.config = config
         self.data_config = data_config
-        self.train_config = train_config
 
     def build_datamodule(self):
         raise NotImplementedError
@@ -86,7 +80,7 @@ class BaseExperiment:
             max_epochs=self.config.max_epochs,
             accelerator="gpu",
             devices=1,
-            precision=self.train_config["system"]["precision"],
+            precision="16-mixed",
             logger=logger,
             callbacks=self.build_callbacks(wandb.run.id),
             log_every_n_steps=16,
@@ -106,7 +100,7 @@ class ContrastiveExperiment(BaseExperiment):
         return ContrastiveDataModule(
             data_config=self.data_config,
             batch_size=self.config.batch_size,
-            num_workers=self.train_config["system"]["num_workers"],
+            num_workers=self.config["num_workers"],
         )
 
     def build_model(self):
@@ -128,7 +122,7 @@ class ContrastiveExperiment(BaseExperiment):
         return ContrastiveTrainingModule(
             encoder_veg=encoder_veg,
             encoder_weather=encoder_weather,
-            lr=self.config.lr,  # float() to ensure it's a native Python float for WandB logging
+            lr=float(self.config.lr),
             temperature=self.config.temperature,
         )
 
@@ -156,20 +150,20 @@ class ForecastingExperiment(BaseExperiment):
         return ForecastingDataModule(
             data_config=self.data_config,
             batch_size=self.config.batch_size,
-            num_workers=self.train_config["system"]["num_workers"],
+            num_workers=self.config["num_workers"],
         )
 
     def build_model(self):
 
-        model = LSTM(
+        model = ModelClass[self.config.model_name](
             veg_dim=len(self.data_config["vegetation"]["variables"]),
             weather_dim=len(self.data_config["weather"]["variables"]),
-            hidden_dim=self.config.hidden_dim,
+            config=self.config,
         )
 
         return ForecastingTrainModule(
             model=model,
-            lr=self.config.lr,
+            lr=float(self.config.lr),
         )
 
     def run(self):
@@ -190,33 +184,28 @@ class ForecastingExperiment(BaseExperiment):
 
 def run():
     data_config = load_config(CONFIG_DIR / "data_config.yaml")
-    train_config = load_config(CONFIG_DIR / "train_config.yaml")
+    default_config = load_config(CONFIG_DIR / "train_config.yaml")
 
-    default_config = {
-        **train_config["model"],
-        **train_config["training"],
-    }
-
-    seed_everything(train_config["system"]["seed"], workers=True)
+    seed_everything(42, workers=True)
 
     wandb.init(
         project="contrastive-earthnet",
         config=default_config,
     )
-
+    # Overwrite config with sweep values if running in a sweep
     config = wandb.config
 
-    mode = train_config["experiment"]["mode"]
+    task = default_config["task"]
 
-    if mode == "contrastive":
-        experiment = ContrastiveExperiment(config, data_config, train_config)
+    if task == "contrastive":
+        experiment = ContrastiveExperiment(config, data_config)
 
-    elif mode == "forecasting":
+    elif task == "forecasting":
         pass
-        experiment = ForecastingExperiment(config, data_config, train_config)
+        experiment = ForecastingExperiment(config, data_config)
 
     else:
-        raise ValueError(f"Unknown experiment mode: {mode}")
+        raise ValueError(f"Unknown experiment task: {task}")
 
     experiment.run()
 

@@ -1,1 +1,1 @@
-from .datamodules import ContrastiveDataModule
+from .datamodules import ContrastiveDataModule, ForecastingDataModule
