@@ -1,5 +1,6 @@
 from torch import optim
 from pytorch_lightning import LightningModule
+import torch
 from loss import info_nce_loss
 import torch.nn.functional as F
 import torch.nn as nn
@@ -88,9 +89,10 @@ class ForecastingTrainModule(LightningModule):
     """
 
     def __init__(self, model, lr=3e-4):
-        super().__init__(lr=lr)
+        super().__init__()
         self.model = model
         self.loss_fn = nn.MSELoss()
+        self.lr = lr
 
     def forward(self, batch):
         return self.model(batch)
@@ -104,7 +106,10 @@ class ForecastingTrainModule(LightningModule):
 
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
-        loss = self.loss_fn(y_pred, y_true)
+        mask = ~torch.isnan(y_true)
+
+        loss = self.loss_fn(y_pred[mask], y_true[mask])
+
         self.log(
             "train_loss",
             loss,
@@ -133,3 +138,9 @@ class ForecastingTrainModule(LightningModule):
 
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
+
+    def configure_optimizers(self):
+        return optim.Adam(
+            list(self.model.parameters()),
+            lr=self.lr,
+        )

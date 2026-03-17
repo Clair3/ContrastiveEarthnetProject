@@ -112,7 +112,7 @@ class ForecastingDataset(BaseDataset):
 
         super().__init__(dataset_path, sentinel2_vars, era5_vars)
 
-        years = np.unique(self.dataset.time_veg.dt.year.values)[:-1]
+        years = np.unique(self.dataset.time_veg.dt.year.values)[:2]
         self.training_pairs = self._create_training_pairs(years)
 
     def _load_year(self, sample, year):
@@ -147,5 +147,5 @@ class ForecastingDataset(BaseDataset):
             }
 
         except Exception as e:
-            logging.warning(f"Skipping {(sample_id, year)}: {e}")
+            # logging.warning(f"Skipping {(sample_id, year)}: {e}")
             return None

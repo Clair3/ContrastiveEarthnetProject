@@ -64,5 +64,8 @@ class TimeSeriesTransformerEncoder(nn.Module):
         padding_mask = torch.cat([cls_mask, padding_mask], dim=1)  # [B, T+1]
 
         x = self.transformer(x, src_key_padding_mask=padding_mask)  # [B, T, d_model]
-        embedding = x[:, 0, :]  # [B, d_model] - CLS token representation
-        return self.norm(embedding)
+        if self.config.task == "contrastive":
+            embedding = x[:, 0, :]  # CLS token
+            return self.norm(embedding)
+        else:
+            return self.norm(x[:, 1:, :])  # Full sequence embeddings (skip CLS)

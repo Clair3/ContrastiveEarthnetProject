@@ -83,10 +83,10 @@ class BaseExperiment:
             precision="16-mixed",
             logger=logger,
             callbacks=self.build_callbacks(wandb.run.id),
-            log_every_n_steps=16,
+            log_every_n_steps=32,
             gradient_clip_val=1.0,
             deterministic=True,
-            profiler="simple",
+            profiler=None,  # "simple",
             enable_progress_bar=True,
         )
 
@@ -155,14 +155,13 @@ class ForecastingExperiment(BaseExperiment):
 
     def build_model(self):
 
-        model = ModelClass[self.config.model_name](
-            veg_dim=len(self.data_config["vegetation"]["variables"]),
-            weather_dim=len(self.data_config["weather"]["variables"]),
+        self.model = ModelClass[self.config.model_name](
+            data_config=self.data_config,
             config=self.config,
         )
 
         return ForecastingTrainModule(
-            model=model,
+            model=self.model,
             lr=float(self.config.lr),
         )
 

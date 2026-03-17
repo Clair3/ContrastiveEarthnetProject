@@ -32,19 +32,20 @@ class ContrastiveDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.dataset_path = Path(data_config["dataset"]["path"])
-        self.data_config = data_config
+        self.sentinel2_vars = data_config["vegetation"]["variables"]
+        self.era5_vars = data_config["weather"]["variables"]
 
     def _build_dataset(self, split):
         return ContrastiveDataset(
             dataset_path=self.dataset_path / f"{split}.zarr",
-            sentinel2_vars=self.data_config["vegetation"]["variables"],
-            era5_vars=self.data_config["weather"]["variables"],
+            sentinel2_vars=self.sentinel2_vars,
+            era5_vars=self.era5_vars,
         )
 
     def setup(self, stage=None):
         self.train_dataset = self._build_dataset("train")
-        self.val_dataset = self._build_dataset("validation")
-        self.test_dataset = self._build_dataset("test")
+        self.val_dataset = self._build_dataset("train")
+        self.test_dataset = self._build_dataset("train")
 
     def _build_dataloader(self, dataset, shuffle=False):
         return DataLoader(
@@ -59,7 +60,6 @@ class ContrastiveDataModule(LightningDataModule):
             collate_fn=safe_collate,
             pin_memory=True,
             persistent_workers=self.num_workers > 0,
-            pin_memory=True,
         )
 
     def train_dataloader(self):
@@ -73,9 +73,12 @@ class ContrastiveDataModule(LightningDataModule):
 
 
 class ForecastingDataModule(ContrastiveDataModule):
+    def __init__(self, data_config, batch_size=16, num_workers=16):
+        super().__init__(data_config, batch_size, num_workers)
+
     def _build_dataset(self, split):
         return ForecastingDataset(
-            dataset_path=self.dataset_path / f"{split}_10.zarr",
+            dataset_path=self.dataset_path / f"{split}.zarr",
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
         )

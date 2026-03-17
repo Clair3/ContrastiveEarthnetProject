@@ -29,7 +29,7 @@ class SeasonalPositionalEncoding(nn.Module):
         num_freqs = d_model // 2
         periods = torch.logspace(
             np.log10(min_period), np.log10(max_period), num_freqs
-        )  # Creates periods: [10, 15, 23, 35, 53, 81, 123, 187, 284, 365] days (example)
+        )  # Creates periods of eg: [10, 15, 23, 35, 53, 81, 123, 187, 284, 365] days
         freqs = 2 * np.pi / periods  # angular frequency (radians/day)
 
         positional_encoder = torch.zeros(sequence_length, d_model)
@@ -45,7 +45,7 @@ class SeasonalPositionalEncoding(nn.Module):
 
 
 class PositionalEncoding(nn.Module):
-    """Positional encoding for transformer"""
+    """Classical Positional encoding for transformer"""
 
     def __init__(self, d_model, max_len=5000):
         super().__init__()
