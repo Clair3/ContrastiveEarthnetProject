@@ -14,10 +14,11 @@ export PYTHONPATH=/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarth
 
 CHUNK_SIZE=5
 LIST="sample_paths.txt"
-OUTDIR="datasets/samples/"
+OUTDIR="datasets/samples_aligned/"
+echo "Output directory: $OUTDIR"
 
 START=$(( SLURM_ARRAY_TASK_ID * CHUNK_SIZE ))
-END= $(( START + CHUNK_SIZE - 1 ))
+END=$(( START + CHUNK_SIZE - 1 ))
 
 echo "Task $SLURM_ARRAY_TASK_ID processes samples index $START to $END"
 

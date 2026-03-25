@@ -135,11 +135,11 @@ def main():
     """Main preprocessing pipeline."""
 
     # Configuration
-    INPUT_DIR = "datasets/samples"
-    OUTPUT_DIR = "datasets"
+    INPUT_DIR = "datasets/samples_aligned/"
+    OUTPUT_DIR = "datasets/aligned/"
     SCRATCH_DIR = Path("/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject")
-    VALIDATION_YEAR = 2020
-    TEST_YEAR = 2021
+    VALIDATION_YEAR = 2021
+    TEST_YEAR = 2022
 
     WEATHER_VARS = [
         # "t2m_mean",

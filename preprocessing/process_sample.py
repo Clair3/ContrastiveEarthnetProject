@@ -38,7 +38,7 @@ class ProcessTrainDataset:
         temporal_resolution_veg: int,
         temporal_resolution_weather: int,
         era5_variables: List[str] | None = None,
-        output_dir: str | Path = "preprocessed/samples",
+        output_dir: str | Path = "preprocessed/samples_aligned",
     ):
         self.temporal_resolution_veg = int(temporal_resolution_veg)
         self.temporal_resolution_weather = int(temporal_resolution_weather)
@@ -261,7 +261,7 @@ def parse_args():
         "--n-jobs", type=int, default=None, help="Number of processes for multiproc"
     )
     p.add_argument("--output-dir", type=str, required=True)
-    p.add_argument("--temporal-resolution-veg", type=int, default=16)
+    p.add_argument("--temporal-resolution-veg", type=int, default=5)
     p.add_argument("--temporal-resolution-weather", type=int, default=5)
     return p.parse_args()
 

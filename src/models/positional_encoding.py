@@ -44,7 +44,33 @@ class SeasonalPositionalEncoding(nn.Module):
         return x + self.positional_encoder[:, : x.size(1), :]
 
 
-class PositionalEncoding(nn.Module):
+class YearPositionalEncoding(nn.Module):
+    def __init__(self, d_model, sequence_length=730, max_period=365, num_years=5):
+        super().__init__()
+        # Original seasonal positional encoding
+        self.seasonal_pe = SeasonalPositionalEncoding(
+            d_model, sequence_length, max_period
+        )
+
+        # Year embedding: one per year
+        self.year_embedding = nn.Embedding(num_years, d_model)
+
+    def forward(self, x, year_ids):
+        """
+        x: [batch, seq_len, d_model] input features projected to d_model
+        year_ids: [batch, seq_len] integer IDs for the year of each timestep
+                  e.g., 0 = past year, 1 = next year, etc.
+        """
+        # Add seasonal encoding
+        x = self.seasonal_pe(x)
+
+        # Add year embedding
+        year_emb = self.year_embedding(year_ids)  # [batch, seq_len, d_model]
+        x = x + year_emb
+        return x
+
+
+class ClassicPositionalEncoding(nn.Module):
     """Classical Positional encoding for transformer"""
 
     def __init__(self, d_model, max_len=5000):

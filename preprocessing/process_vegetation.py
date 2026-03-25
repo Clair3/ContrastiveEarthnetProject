@@ -35,6 +35,9 @@ class Sentinel2Preprocessing:
         ds = NoiseRemovalHelper().cloudfree_timeseries(
             ds, noise_half_windows=self.noise_half_windows, gapfill=self.gapfill
         )
+
+        msc = self.compute_msc(ds[f"{self.index.lower()}"])
+        ds["msc"] = msc
         return ds.isel(location=0)  # remove location dim
 
     def _ensure_coordinates(self, ds):
@@ -156,6 +159,46 @@ class Sentinel2Preprocessing:
         """Checks if the masked data contains excessive NaN values."""
         nan_percentage = data.isnull().mean().values * 100
         return nan_percentage > 95
+
+    def compute_msc(
+        self,
+        data: xr.DataArray,
+        smoothing_window: int = 7,  # 9,
+        poly_order: int = 2,
+    ):
+
+        # Step 1: Compute mean seasonal cycle
+        mean_seasonal_cycle = data.groupby("time.dayofyear").mean("time", skipna=True)
+        # Apply circular padding along the dayofyear axis before rolling
+        # # edge case growing season during the change of year
+        # padded_values = np.pad(
+        #     mean_seasonal_cycle.values,
+        #     (
+        #         (smoothing_window, smoothing_window),
+        #         (0, 0),
+        #     ),  # Pad along the dayofyear axis
+        #     mode="wrap",  # Wrap-around to maintain continuity
+        # )
+        #
+        # padded_values = circular_rolling_mean(
+        #     padded_values, window_size=2, min_periods=1
+        # )
+        # padded_values = circular_rolling_mean(
+        #     padded_values, window_size=4, min_periods=1
+        # )
+        #
+        # padded_values = np.nan_to_num(padded_values, nan=0)
+        #
+        # # Step 5: Apply Savitzky-Golay smoothing
+        # smoothed_values = savgol_filter(
+        #     padded_values, smoothing_window, poly_order, axis=0
+        # )
+        # mean_seasonal_cycle = mean_seasonal_cycle.copy(
+        #     data=smoothed_values[smoothing_window:-smoothing_window]
+        # )
+        # # Step 6: Ensure all values are non-negative
+        # mean_seasonal_cycle = mean_seasonal_cycle.where(mean_seasonal_cycle > 0, 0)
+        return mean_seasonal_cycle
 
     def compute_max_per_period(self, data, period_size=10):
         # Function to generate valid dates (time bins) for all years at once

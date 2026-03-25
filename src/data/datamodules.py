@@ -43,9 +43,10 @@ class ContrastiveDataModule(LightningDataModule):
         )
 
     def setup(self, stage=None):
-        self.train_dataset = self._build_dataset("train")
-        self.val_dataset = self._build_dataset("train")
-        self.test_dataset = self._build_dataset("train")
+        suffix = "_10" if self.data_config["dataset"]["debug"] else ""
+        self.train_dataset = self._build_dataset(f"train{suffix}")
+        self.val_dataset = self._build_dataset(f"validation{suffix}")
+        self.test_dataset = self._build_dataset(f"test{suffix}")
 
     def _build_dataloader(self, dataset, shuffle=False):
         return DataLoader(

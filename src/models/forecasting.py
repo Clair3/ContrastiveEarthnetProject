@@ -1,19 +1,23 @@
+from matplotlib.pyplot import flag
 import torch
 import torch.nn as nn
 from .encoders import TimeSeriesTransformerEncoder
 
 
 class PersistenceBaseline(nn.Module):
-    def __init__(self, veg_dim, weather_dim, config):
+    def __init__(self):
         super().__init__()
 
     def forward(self, batch):
-        veg_history = batch["vegetation_history"]
-        return veg_history
+        return batch["vegetation_history"]
 
 
 class SeasonalBaseline(nn.Module):
-    pass
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, batch):
+        return batch["mean_seasonal_cycle"]
 
 
 class LinearRegressionBaseline(nn.Module):
@@ -114,61 +118,117 @@ class LSTM(nn.Module):
 
 
 class TransformerForecast(nn.Module):
-
-    def __init__(self, veg_dim, weather_dim, d_model=128):
-
+    def __init__(self, data_config, config=None):
         super().__init__()
+        veg_dim = len(data_config["vegetation"]["variables"])
+        weather_dim = len(data_config["weather"]["variables"])
+        veg_seq_len = data_config["vegetation"]["sequence_length"]
+        weather_seq_len = data_config["weather"]["sequence_length"]
+
+        if veg_seq_len != weather_seq_len:
+            raise ValueError(
+                f"Weather and vegetation sequence lengths must match: {veg_seq_len} vs {weather_seq_len}"
+            )
+
+        sequence_length = veg_seq_len * 2  # Usually 2 years / temporal resolution
+        input_dim = veg_dim + weather_dim + 1  # +1 for year flag
 
         self.encoder = TimeSeriesTransformerEncoder(
-            input_dim=veg_dim + weather_dim,
-            sequence_length=23,
-            d_model=d_model,
+            input_dim=input_dim,
+            sequence_length=sequence_length,  # veg history + veg forecast
+            d_model=config.d_model,
+            seasonal_positional_encoding=False,
         )
-
-        self.head = nn.Linear(d_model, veg_dim)
+        self.head = nn.Linear(config.d_model, veg_seq_len)  # predict only veg forecast
+        self.model = nn.Sequential(self.encoder, self.head)
 
     def forward(self, batch):
+        B, T, C_veg = batch["vegetation_history"].shape
+        C_weather = batch["weather_history"].shape[2]
 
-        veg_history = batch["vegetation_history"]
-        weather_history = batch["weather_history"]
-        weather_future = batch["weather_future"]
-        emb_veg_history = self.encoder(veg_history)
-        emb_weather_history = self.encoder(weather_history)
-        emb_weather_future = self.encoder(weather_future)
+        # 1. Prepare vegetation: history + placeholder for forecast
+        veg_forecast_placeholder = torch.full(
+            (B, T, C_veg), float("nan"), device=batch["vegetation_history"].device
+        )
+        veg_seq = torch.cat(
+            [batch["vegetation_history"], veg_forecast_placeholder], dim=1
+        )  # [B, 2*T, C_veg]
 
-        latent_history = torch.cat(
-            [emb_veg_history, emb_weather_history], dim=-1
-        )  # see cross-attention in transformer decoder for how to do this better
+        # Prepare weather: history + forecast
+        weather_seq = torch.cat(
+            [batch["weather_history"], batch["weather_forecast"]], dim=1
+        )  # [B, 2*T, C_weather]
 
-        return self.head(embedding)
+        # Year flag: 0 for history, 1 for forecast
+        year_flag = torch.cat(
+            [
+                torch.zeros(B, T, 1, device=weather_seq.device),
+                torch.ones(B, T, 1, device=weather_seq.device),
+            ],
+            dim=1,
+        )
 
+        weather_seq = torch.cat(
+            [weather_seq, year_flag], dim=-1
+        )  # # [B, 2*T, C_weather+1]
 
-def forward(self, batch):
+        x = torch.cat([veg_seq, weather_seq], dim=-1)
 
-    veg_hist = batch["vegetation_history"]
-    weather_hist = batch["weather_history"]
-    weather_future = batch["weather_future"]
-
-    # Encode sequences
-    veg_tokens = self.encoder_veg(veg_hist)  # [B, T_v, d]
-    weather_tokens = self.encoder_weather(weather_hist)  # [B, T_w, d]
-    weather_future_tokens = self.encoder_weather(weather_future)
-
-    # Build memory
-    memory = torch.cat([veg_tokens, weather_tokens, weather_future_tokens], dim=1)
-
-    # Build query (future timesteps)
-    B, T_future, _ = weather_future.shape
-    queries = torch.zeros(B, T_future, self.d_model, device=veg_hist.device)
-    queries = self.positional_encoding(queries)
-
-    # Decode
-    out = self.decoder(tgt=queries, memory=memory)
-
-    # Predict vegetation
-    pred = self.head(out)
-
-    return pred
+        encoded = self.encoder(x)
+        out = self.head(encoded)  # [B, T_veg] predict veg forecast only
+        return out
 
 
-# todo add memba + transformer head with contrastive embeddings
+class TransformerForecastOld(nn.Module):
+
+    def __init__(self, data_config, config=None):
+        super().__init__()
+        veg_dim = len(data_config["vegetation"]["variables"])
+        weather_dim = len(data_config["weather"]["variables"])
+        veg_seq_len = data_config["vegetation"]["sequence_length"]
+        weather_seq_len = data_config["weather"]["sequence_length"]
+
+        if weather_seq_len != veg_seq_len:
+            raise ValueError(
+                f"Weather and vegetation resolution should be identical resolution for this model: {veg_seq_len} vs {weather_seq_len}"
+            )
+
+        super().__init__()
+        self.encoder = TimeSeriesTransformerEncoder(
+            input_dim=veg_dim + weather_dim + 1,  # +1 for year flag
+            sequence_length=veg_seq_len
+            * 2,  # veg history + weather history + weather forecast
+            d_model=config.d_model,
+            seasonal_positional_encoding=False,
+        )
+        self.head = nn.Linear(config.d_model, veg_seq_len)
+        self.model = nn.Sequential(self.encoder, self.head)
+
+    def forward(self, batch):
+        veg_hist = batch["vegetation_history"]  # [B, T_veg, C_veg]
+        weather_hist = batch["weather_history"]  # [B, T_w, C_w]
+        forecast = batch["weather_forecast"]  # [B, T_w, C_w]
+
+        veg_forecast = (
+            torch.zeros(veg_hist.shape[0], veg_hist.shape[1], veg_hist.shape[2])
+            * torch.nan
+        )  # [B, T_veg, C_veg]
+        veg_time_series = torch.cat(
+            [veg_hist, veg_forecast], dim=1
+        )  # [B, T_veg*2, C_veg]
+        weather_time_series = torch.cat(
+            [weather_hist, forecast], dim=1
+        )  # [B, T_w*2, C_w]
+        year_flag = torch.cat(
+            [torch.zeros(weather_hist), torch.ones(forecast)]
+        )  # [year0 + year1]
+        year_flag = (
+            year_flag.unsqueeze(0).unsqueeze(-1).expand(B, -1, -1)
+        )  # [B, T_w*2, 1]
+        weather_time_series = torch.cat([weather_time_series, year_flag], dim=-1)
+
+        x = torch.cat(
+            [veg_time_series, weather_time_series],
+            dim=-1,
+        )
+        return self.model(x)
