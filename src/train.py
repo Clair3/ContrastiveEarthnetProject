@@ -105,7 +105,8 @@ class ForecastingTrainModule(LightningModule):
             return None
 
         y_pred = self(batch)
-        y_true = batch["vegetation_forecast"]
+        y_true = batch["vegetation_forecast"].squeeze(-1)
+        print(y_pred.shape, y_true.shape)
         mask = ~torch.isnan(y_true)
 
         loss = self.loss_fn(y_pred[mask], y_true[mask])
@@ -122,7 +123,10 @@ class ForecastingTrainModule(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         if batch is None:
+            print("not here")
             return None
+        print("here")
+
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
         loss = self.loss_fn(y_true, y_pred)

@@ -34,6 +34,7 @@ class ContrastiveDataModule(LightningDataModule):
         self.dataset_path = Path(data_config["dataset"]["path"])
         self.sentinel2_vars = data_config["vegetation"]["variables"]
         self.era5_vars = data_config["weather"]["variables"]
+        self.debug = data_config["dataset"]["debug"]
 
     def _build_dataset(self, split):
         return ContrastiveDataset(
@@ -43,7 +44,7 @@ class ContrastiveDataModule(LightningDataModule):
         )
 
     def setup(self, stage=None):
-        suffix = "_10" if self.data_config["dataset"]["debug"] else ""
+        suffix = "_10" if self.debug else ""
         self.train_dataset = self._build_dataset(f"train{suffix}")
         self.val_dataset = self._build_dataset(f"validation{suffix}")
         self.test_dataset = self._build_dataset(f"test{suffix}")

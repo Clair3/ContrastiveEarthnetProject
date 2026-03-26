@@ -48,8 +48,7 @@ class LinearRegressionBaseline(nn.Module):
             [veg.flatten(1), weather.flatten(1), forecast.flatten(1)],
             dim=-1,
         )
-        out = self.linear(x)
-        return out.view(veg.shape[0], self.veg_seq_len, self.veg_dim)
+        return self.linear(x)
 
 
 class MLP(nn.Module):
@@ -89,10 +88,7 @@ class MLP(nn.Module):
             [veg.flatten(1), weather.flatten(1), forecast.flatten(1)],
             dim=-1,
         )
-        out = self.mlp(x)
-        return out.view(
-            veg.shape[0], self.veg_seq_len, self.veg_dim
-        )  # reshape to [B, T_veg, C_veg]
+        return self.mlp(x)
 
 
 class LSTM(nn.Module):
@@ -173,10 +169,7 @@ class TransformerForecast(nn.Module):
         )  # # [B, 2*T, C_weather+1]
 
         x = torch.cat([veg_seq, weather_seq], dim=-1)
-
-        encoded = self.encoder(x)
-        out = self.head(encoded)  # [B, T_veg] predict veg forecast only
-        return out
+        return self.model(x)
 
 
 class TransformerForecastOld(nn.Module):
@@ -200,6 +193,7 @@ class TransformerForecastOld(nn.Module):
             * 2,  # veg history + weather history + weather forecast
             d_model=config.d_model,
             seasonal_positional_encoding=False,
+            causal_mask=True,
         )
         self.head = nn.Linear(config.d_model, veg_seq_len)
         self.model = nn.Sequential(self.encoder, self.head)
