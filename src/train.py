@@ -97,51 +97,45 @@ class ForecastingTrainModule(LightningModule):
     def forward(self, batch):
         return self.model(batch)
 
-    def training_step(self, batch, batch_idx):
+    def _step(self, batch, stage: str):
         if batch is None:
-            self.log(
-                "train_loss", float("nan"), on_step=True, on_epoch=True, prog_bar=True
-            )
+            if stage == "train":
+                self.log(
+                    f"{stage}_loss",
+                    float("nan"),
+                    on_step=True,
+                    on_epoch=True,
+                    prog_bar=True,
+                )
             return None
 
         y_pred = self(batch)
-        y_true = batch["vegetation_forecast"].squeeze(-1)
-        print(y_pred.shape, y_true.shape)
+        y_true = batch["vegetation_forecast"]
+
+        # Mask NaNs consistently
         mask = ~torch.isnan(y_true)
 
         loss = self.loss_fn(y_pred[mask], y_true[mask])
 
         self.log(
-            "train_loss",
+            f"{stage}_loss",
             loss,
-            on_step=True,
+            on_step=(stage == "train"),
             on_epoch=True,
             prog_bar=True,
             batch_size=y_true.shape[0],
         )
+
         return loss
+
+    def training_step(self, batch, batch_idx):
+        return self._step(batch, "train")
 
     def validation_step(self, batch, batch_idx):
-        if batch is None:
-            print("not here")
-            return None
-
-        y_pred = self(batch)
-        y_true = batch["vegetation_forecast"].squeeze(-1)
-
-        loss = self.loss_fn(y_true, y_pred)
-        self.log(
-            "val_loss",
-            loss,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            batch_size=y_true.shape[0],
-        )
-        return loss
+        return self._step(batch, "val")
 
     def test_step(self, batch, batch_idx):
-        return self.validation_step(batch, batch_idx)
+        return self._step(batch, "test")
 
     def configure_optimizers(self):
         return optim.Adam(

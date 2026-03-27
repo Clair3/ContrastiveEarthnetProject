@@ -143,19 +143,18 @@ class ForecastingDataset(BaseDataset):
     def __getitem__(self, idx):
 
         sample_id, year = self.training_pairs[idx]
-        sample = self.dataset.isel(sample=sample_id)
+        try:
+            sample = self.dataset.isel(sample=sample_id)
 
-        veg_hist, weather_hist = self._load_year(sample, year)
-        veg_forecast, weather_forecast = self._load_year(sample, year + 1)
-        return {
-            "vegetation_history": veg_hist,
-            "weather_history": weather_hist,
-            "vegetation_forecast": veg_forecast,
-            "weather_forecast": weather_forecast,
-        }
-        # except Exception as e:
+            veg_hist, weather_hist = self._load_year(sample, year)
+            veg_forecast, weather_forecast = self._load_year(sample, year + 1)
 
-
-#
-#     logging.warning(f"Skipping {(sample_id, year)}: {e}")
-#     return None
+            return {
+                "vegetation_history": veg_hist,
+                "weather_history": weather_hist,
+                "vegetation_forecast": veg_forecast,
+                "weather_forecast": weather_forecast,
+            }
+        except Exception as e:
+            # logging.warning(f"Skipping {(sample_id, year)}: {e}")
+            return None

@@ -3,7 +3,7 @@ from .forecasting import (
     LSTM,
     PersistenceBaseline,
     SeasonalBaseline,
-    TransformerForecast,
+    TransformerBaseline,
     LinearRegressionBaseline,
     MLP,
 )
@@ -12,7 +12,7 @@ ModelClass = {
     "LSTM": LSTM,
     "PersistenceBaseline": PersistenceBaseline,
     "SeasonalBaseline": SeasonalBaseline,
-    "TransformerForecast": TransformerForecast,
+    "TransformerBaseline": TransformerBaseline,
     "LinearRegressionBaseline": LinearRegressionBaseline,
     "MLP": MLP,
 }
