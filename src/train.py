@@ -125,10 +125,10 @@ class ForecastingTrainModule(LightningModule):
         if batch is None:
             print("not here")
             return None
-        print("here")
 
         y_pred = self(batch)
-        y_true = batch["vegetation_forecast"]
+        y_true = batch["vegetation_forecast"].squeeze(-1)
+
         loss = self.loss_fn(y_true, y_pred)
         self.log(
             "val_loss",
