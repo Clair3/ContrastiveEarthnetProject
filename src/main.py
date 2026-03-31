@@ -25,8 +25,9 @@ from train import ContrastiveTrainingModule, ForecastingTrainModule
 from models import TimeSeriesTransformerEncoder, ModelClass
 
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-CONFIG_DIR = SCRIPT_DIR / "configs"
+PROJECT_DIR = Path(__file__).parent.parent.resolve()
+CONFIG_DIR = PROJECT_DIR / "configs"
+OUTPUT_DIR = PROJECT_DIR / "z_outputs"
 
 
 def load_config(config_path: str) -> dict:
@@ -39,6 +40,9 @@ class BaseExperiment:
     def __init__(self, config, data_config):
         self.config = config
         self.data_config = data_config
+        self.save_path = os.path.join(
+            f"{OUTPUT_DIR}/checkpoints", f"{wandb.run.id}_final.pth"
+        )
 
     def build_datamodule(self):
         raise NotImplementedError
@@ -68,10 +72,44 @@ class BaseExperiment:
 
         return [checkpoint, early_stop, lr_monitor]
 
-    def run(self):
+    @staticmethod
+    def estimate_batch_resources(model, datamodule, device="cuda"):
+        """
+        Run a single batch through the model to check memory and speed.
+        """
+        model = model.to(device)
+        datamodule.setup("fit")
+        batch = next(iter(datamodule.train_dataloader()))
 
+        # Move batch to device
+        batch = {k: v.to(device) for k, v in batch.items()}
+
+        torch.cuda.reset_peak_memory_stats(device)
+
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+
+        start.record()
+        output = model(batch) if callable(model) else model.forward(batch)
+        if hasattr(output, "sum"):  # make a dummy loss
+            loss = output.sum()
+            loss.backward()
+        end.record()
+        torch.cuda.synchronize()
+
+        mem_peak = torch.cuda.max_memory_allocated(device) / 1024**2
+        print(f"💡 Single-batch GPU memory used: {mem_peak:.1f} MB")
+        print(f"💡 Time per batch: {start.elapsed_time(end)/1000:.3f} s")
+
+    def run(self, dry_run=False):
         datamodule = self.build_datamodule()
         model = self.build_model()
+
+        if dry_run:
+            print("⚡ Running dry-run on single batch to estimate resources...")
+            self.estimate_batch_resources(model, datamodule)
+            return  # skip full training
+
         logger = WandbLogger(
             project="contrastive-earthnet", config=self.config, log_model="best"
         )
@@ -126,11 +164,9 @@ class ContrastiveExperiment(BaseExperiment):
             temperature=self.config.temperature,
         )
 
-    def run(self):
+    def run(self, dry_run=False):
 
-        super().run()
-
-        save_path = os.path.join("checkpoints", f"{wandb.run.id}_final.pth")
+        super().run(dry_run=dry_run)
 
         torch.save(
             {
@@ -139,7 +175,7 @@ class ContrastiveExperiment(BaseExperiment):
                 "config": dict(self.config),
                 "run_id": wandb.run.id,
             },
-            save_path,
+            self.save_path,
         )
 
 
@@ -165,11 +201,9 @@ class ForecastingExperiment(BaseExperiment):
             lr=float(self.config.lr),
         )
 
-    def run(self):
+    def run(self, dry_run=False):
 
-        super().run()
-
-        save_path = os.path.join("checkpoints", f"{wandb.run.id}_final.pth")
+        super().run(dry_run=dry_run)
 
         torch.save(
             {
@@ -177,13 +211,13 @@ class ForecastingExperiment(BaseExperiment):
                 "config": dict(self.config),
                 "run_id": wandb.run.id,
             },
-            save_path,
+            self.save_path,
         )
 
 
-def run():
+def run(dry_run=False):
     data_config = load_config(CONFIG_DIR / "data_config.yaml")
-    default_config = load_config(CONFIG_DIR / "train_config.yaml")
+    default_config = load_config(CONFIG_DIR / "default_config.yaml")
 
     seed_everything(42, workers=True)
 
@@ -206,10 +240,11 @@ def run():
     else:
         raise ValueError(f"Unknown experiment task: {task}")
 
-    experiment.run()
+    experiment.run(dry_run=dry_run)
 
     wandb.finish()
 
 
 if __name__ == "__main__":
-    run()
+    dry_run = False
+    run(dry_run=dry_run)
