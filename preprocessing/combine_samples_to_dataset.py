@@ -103,7 +103,7 @@ def main():
     dataset = normalize_weather_variables(combined, WEATHER_VARS)
 
     print("\n=== Chunking dataset ===")
-    dataset = dataset.chunk({"sample": 1, "time_weather": -1, "time_veg": -1})
+    dataset = dataset.chunk({"sample": 1000, "time_weather": -1, "time_veg": -1})
 
     # Save splits
     print("\n=== Saving datasets and copying to tscratch ===")

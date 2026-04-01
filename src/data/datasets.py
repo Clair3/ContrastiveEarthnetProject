@@ -23,9 +23,10 @@ class BaseDataset(Dataset):
 
         # Pre-compute year masks once during init
         self._precompute_year_indices()
-        print("Loading all samples into memory.")
         self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
-        print("Preloaded all samples into memory.")
+        self.locations = list(
+            zip(self.dataset.latitude.values, self.dataset.longitude.values)
+        )
 
     def dataset_split(self, dataset_path: str, years: list[int]) -> xr.Dataset:
         """
@@ -113,17 +114,13 @@ class ContrastiveDataset(BaseDataset):
     def __getitem__(self, idx) -> dict | None:
         sample_id, year = self.training_pairs[idx]
         try:
-            sample = self.dataset.isel(sample=sample_id)
-            location = (
-                sample.latitude.values.item(),
-                sample.longitude.values.item(),
-            )
+            sample = self.samples[sample_id]
             vegetation, weather = self._load_year(sample, year)
 
             data = {
                 "vegetation": vegetation,
                 "weather": weather,
-                "location": location,
+                "location": self.locations[sample_id],
             }
             return data
         except Exception as e:

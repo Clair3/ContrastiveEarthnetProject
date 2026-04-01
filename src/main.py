@@ -183,8 +183,6 @@ class ContrastiveExperiment(BaseExperiment):
 class ForecastingExperiment(BaseExperiment):
 
     def build_datamodule(self):
-        print(self.data_config["train"])
-
         return ForecastingDataModule(
             data_config=self.data_config,
             batch_size=self.config.batch_size,
