@@ -1,3 +1,4 @@
 from data import ContrastiveDataModule, ForecastingDataModule
-from modules import ContrastiveTrainingModule, ForecastingTrainModule
+from modules.contrastive_train import ContrastiveTrainingModule
+from modules.forecasting_train import ForecastingTrainModule
 from models import TimeSeriesTransformerEncoder, ModelClass
