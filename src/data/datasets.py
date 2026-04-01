@@ -150,6 +150,7 @@ class ForecastingDataset(BaseDataset):
                 "weather_history": weather_hist,
                 "vegetation_forecast": veg_forecast,
                 "weather_forecast": weather_forecast,
+                "location": self.locations[sample_id],
             }
         except Exception as e:
             # logging.warning(f"Skipping {(sample_id, year)}: {e}")
