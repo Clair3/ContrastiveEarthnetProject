@@ -12,6 +12,7 @@ import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+from contextlib import contextmanager
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import (
@@ -27,7 +28,7 @@ from models import TimeSeriesTransformerEncoder, ModelClass
 
 PROJECT_DIR = Path(__file__).parent.parent.resolve()
 CONFIG_DIR = PROJECT_DIR / "configs"
-OUTPUT_DIR = PROJECT_DIR / "z_outputs"
+OUTPUT_DIR = PROJECT_DIR / "outputs"
 
 
 def load_config(config_path: str) -> dict:
@@ -98,15 +99,15 @@ class BaseExperiment:
         torch.cuda.synchronize()
 
         mem_peak = torch.cuda.max_memory_allocated(device) / 1024**2
-        print(f"💡 Single-batch GPU memory used: {mem_peak:.1f} MB")
-        print(f"💡 Time per batch: {start.elapsed_time(end)/1000:.3f} s")
+        print(f"Single-batch GPU memory used: {mem_peak:.1f} MB")
+        print(f"Time per batch: {start.elapsed_time(end)/1000:.3f} s")
 
-    def run(self, dry_run=False):
+    def run(self, profile_ressources=False):
         datamodule = self.build_datamodule()
         model = self.build_model()
 
-        if dry_run:
-            print("⚡ Running dry-run on single batch to estimate resources...")
+        if profile_ressources:
+            print("Running dry-run on single batch to estimate resources...")
             self.estimate_batch_resources(model, datamodule)
             return  # skip full training
 
@@ -124,7 +125,7 @@ class BaseExperiment:
             log_every_n_steps=32,
             gradient_clip_val=1.0,
             deterministic=True,
-            profiler=None,  # "simple",
+            profiler="simple",
             enable_progress_bar=True,
         )
 
@@ -164,9 +165,9 @@ class ContrastiveExperiment(BaseExperiment):
             temperature=self.config.temperature,
         )
 
-    def run(self, dry_run=False):
+    def run(self, profile_ressources=False):
 
-        super().run(dry_run=dry_run)
+        super().run(profile_ressources=profile_ressources)
 
         torch.save(
             {
@@ -182,6 +183,7 @@ class ContrastiveExperiment(BaseExperiment):
 class ForecastingExperiment(BaseExperiment):
 
     def build_datamodule(self):
+        print(self.data_config["train"])
 
         return ForecastingDataModule(
             data_config=self.data_config,
@@ -201,9 +203,9 @@ class ForecastingExperiment(BaseExperiment):
             lr=float(self.config.lr),
         )
 
-    def run(self, dry_run=False):
+    def run(self, profile_ressources=False):
 
-        super().run(dry_run=dry_run)
+        super().run(profile_ressources=profile_ressources)
 
         torch.save(
             {
@@ -213,38 +215,73 @@ class ForecastingExperiment(BaseExperiment):
             },
             self.save_path,
         )
+        # predictions = self.model.predict(data_config["test"])
+        # pred_path = PREDICTIONS_DIR / f"predictions_{fold[1][0]}.pkl"
 
 
-def run(dry_run=False):
-    data_config = load_config(CONFIG_DIR / "data_config.yaml")
-    default_config = load_config(CONFIG_DIR / "default_config.yaml")
+#
+# with open(pred_path, "wb") as f:
+#    pickle.dump(predictions, f)
 
-    seed_everything(42, workers=True)
 
-    wandb.init(
-        project="contrastive-earthnet",
-        config=default_config,
-    )
-    # Overwrite config with sweep values if running in a sweep
-    config = wandb.config
-
-    task = default_config["task"]
-
+def run_experiment(config, data_config, profile_ressources=False):
+    task = config["task"]
     if task == "contrastive":
         experiment = ContrastiveExperiment(config, data_config)
-
     elif task == "forecasting":
-        pass
         experiment = ForecastingExperiment(config, data_config)
-
     else:
         raise ValueError(f"Unknown experiment task: {task}")
 
-    experiment.run(dry_run=dry_run)
+    experiment.run(profile_ressources=profile_ressources)
 
-    wandb.finish()
+
+@contextmanager
+def wandb_run(train_config, group=None, name=None, project="contrastive-earthnet"):
+    wandb.init(project=project, group=group, name=name, config=train_config)
+    try:
+        yield wandb.config
+    finally:
+        wandb.finish()
+
+
+def run_k_fold(train_config_file, folds=None, profile_ressources=False):
+    data_config = load_config(CONFIG_DIR / "data_config.yaml")
+    train_config = load_config(CONFIG_DIR / train_config_file)
+    seed_everything(42, workers=True)
+
+    if folds is None:
+        with wandb_run(
+            train_config,
+            group=f"{train_config['model_name']}",
+            name=f"fold_{data_config['test']}",
+        ) as config:
+            run_experiment(config, data_config, profile_ressources=profile_ressources)
+
+    else:
+        for train_years, test_years in folds:
+            data_config["train"] = train_years
+            data_config["validation"] = test_years
+            data_config["test"] = test_years
+
+            with wandb_run(
+                train_config,
+                group=f"{train_config['model_name']}",
+                name=f"fold_{test_years}",
+            ) as config:
+                run_experiment(
+                    config, data_config, profile_ressources=profile_ressources
+                )
 
 
 if __name__ == "__main__":
-    dry_run = False
-    run(dry_run=dry_run)
+    profile_ressources = False  # True  # Set to True for quick resource estimation
+    train_config_file = "models/mlp.yaml"
+
+    folds = [
+        ([2017, 2018], [2019]),
+        ([2017, 2018, 2019], [2020]),
+        ([2017, 2018, 2019, 2020], [2021]),
+        ([2017, 2018, 2019, 2020, 2021], [2022]),
+    ]
+    run_k_fold(train_config_file=train_config_file, folds=None)

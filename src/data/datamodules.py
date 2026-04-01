@@ -1,9 +1,3 @@
-import xarray as xr
-import logging
-import numpy as np
-import torch
-
-import pandas as pd
 from pathlib import Path
 
 from pytorch_lightning import LightningDataModule
@@ -31,12 +25,12 @@ class ContrastiveDataModule(LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.dataset_path = Path(data_config["dataset"]["path"])
+        self.dataset_path = Path(data_config["path"])
         self.sentinel2_vars = data_config["vegetation"]["variables"]
         self.era5_vars = data_config["weather"]["variables"]
-        self.train_years = data_config["split"]["train"]
-        self.val_years = data_config["split"]["validation"]
-        self.test_years = data_config["split"]["test"]
+        self.train_years = data_config["train"]
+        self.val_years = data_config["validation"]
+        self.test_years = data_config["test"]
 
     def _build_dataset(self, years):
         return ContrastiveDataset(

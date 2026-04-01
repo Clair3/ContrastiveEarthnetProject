@@ -88,7 +88,10 @@ class MLP(nn.Module):
             [veg.flatten(1), weather.flatten(1), forecast.flatten(1)],
             dim=-1,
         )
-        return self.mlp(x)
+        out = self.mlp(x)
+        if out.ndim == 2:  # [B, T]
+            out = out.unsqueeze(-1)
+        return out
 
 
 class LSTM(nn.Module):
@@ -99,7 +102,18 @@ class LSTM(nn.Module):
 
         input_dim = veg_dim + weather_dim
         hidden_dim = config.hidden_dim if config is not None else 128
-        self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True)
+        num_layers = config.num_layers if config is not None else 1
+        dropout = config.dropout if config is not None else 0.0
+        print(
+            f"Initializing LSTM with hidden_dim={hidden_dim}, num_layers={num_layers}, dropout={dropout}"
+        )
+        self.lstm = nn.LSTM(
+            input_dim,
+            hidden_dim,
+            batch_first=True,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
 
         # Prediction head: maps hidden state to vegetation
         self.head = nn.Linear(hidden_dim, veg_dim)
@@ -189,13 +203,25 @@ class TransformerBaseline(nn.Module):
                 f"Weather and vegetation sequence lengths must match: {veg_seq_len} vs {weather_seq_len}"
             )
 
+        d_model = config.d_model if config is not None else 128
+        num_layers = config.num_layers if config is not None else 2
+        dropout = config.dropout if config is not None else 0.2
+        num_heads = config.num_heads if config is not None else 2
+
+        print(
+            f"Initializing Transformer with d_model={d_model}, num_layers={num_layers}, dropout={dropout}, num_heads={num_heads}"
+        )
+
         sequence_length = veg_seq_len * 2  # Usually 2 years / temporal resolution
         input_dim = veg_dim + weather_dim + 1  # +1 for year flag
 
         self.encoder = TimeSeriesTransformerEncoder(
             input_dim=input_dim,
             sequence_length=sequence_length,  # veg history + veg forecast
-            d_model=config.d_model,
+            d_model=d_model,
+            nhead=num_heads,
+            num_layers=num_layers,
+            dropout=dropout,
             seasonal_positional_encoding=False,
         )
         self.head = nn.Linear(config.d_model, veg_seq_len)  # predict only veg forecast

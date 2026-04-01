@@ -1,37 +1,33 @@
 import xarray as xr
-import logging
-from pathlib import Path
 import numpy as np
 import torch
 
-from pytorch_lightning import LightningDataModule
-from torch.utils.data.dataloader import default_collate
-from torch.utils.data import Dataset, DataLoader
 import pandas as pd
-
-from .batch_sampler import BatchSampler
+from torch.utils.data import Dataset
 
 
 class BaseDataset(Dataset):
     """
-    Contrastive dataset for Sentinel-2 + ERA5 time series.
-    Each sample returns:
-        - anchor: one (location, year)
-        - positive: temporal crop of same (location, year)
-        - negative: another year of same location
+    BaseDataset for Sentinel-2 + ERA5 time series.
+    Preloads entire dataset into RAM as PyTorch tensors.
     """
 
     def __init__(
         self, dataset_path: str, sentinel2_vars: list, era5_vars: list, years=list
     ):
-        self.dataset = self.create_split(dataset_path=dataset_path, years=years)
+        self.dataset = self.dataset_split(dataset_path=dataset_path, years=years)
+        self.num_samples = len(self.dataset.sample)
+        print(f"Dataset loaded with {self.num_samples} samples.")
         self.sentinel2_vars = sentinel2_vars
         self.era5_vars = era5_vars
 
         # Pre-compute year masks once during init
         self._precompute_year_indices()
+        print("Loading all samples into memory.")
+        self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
+        print("Preloaded all samples into memory.")
 
-    def create_split(self, dataset_path: str, years: list[int]) -> xr.Dataset:
+    def dataset_split(self, dataset_path: str, years: list[int]) -> xr.Dataset:
         """
         Create a dataset split containing only data from specified years.
 
@@ -42,64 +38,69 @@ class BaseDataset(Dataset):
         Returns:
             Dataset filtered to only include samples from the specified years
         """
+        print(f"Loading dataset from {dataset_path} and filtering for years {years}")
         dataset = xr.open_zarr(dataset_path)
         return dataset.sel(
             time_veg=pd.DatetimeIndex(dataset.time_veg.values).year.isin(years),
             time_weather=pd.DatetimeIndex(dataset.time_weather.values).year.isin(years),
-        )
+        ).load()
 
     def _create_training_pairs(self, years):
-        """Create list of (sample_id, year) pairs."""
-        pairs = []
-        for sample_id in range(len(self.dataset.sample)):
-            for year in years:
-                pairs.append((sample_id, year))
-
-        return pairs
+        """Create list of (idx_sample, year) pairs."""
+        self.training_pairs = [
+            (idx_sample, year)
+            for idx_sample in range(self.num_samples)
+            for year in years
+        ]
 
     def _precompute_year_indices(self):
         """Pre-compute which time indices belong to each year."""
-
+        #   Vegetation
         # Extract year for each timestamp
         veg_years = pd.DatetimeIndex(self.dataset.time_veg.values).year
-
         # Create a dictionary mapping year → array of indices
-        self.veg_year_masks = {}
-        for year in np.unique(veg_years):
-            self.veg_year_masks[year] = np.where(veg_years == year)[0]
+        self.veg_year_masks = {
+            year: (veg_years == year).nonzero()[0] for year in pd.unique(veg_years)
+        }
 
-        # Same for weather data
+        #   Weather
         weather_years = pd.DatetimeIndex(self.dataset.time_weather.values).year
-        self.weather_year_masks = {}
-        for year in np.unique(weather_years):
-            self.weather_year_masks[year] = np.where(weather_years == year)[0]
+        self.weather_year_masks = {
+            year: (weather_years == year).nonzero()[0]
+            for year in pd.unique(weather_years)
+        }
 
-    def _load_year(self, sample, year):
-        """Return vegetation + weather tensors for a given year."""
+    def _load_year_tensor(self, sample, year):
         veg_idx = self.veg_year_masks[year]
         weather_idx = self.weather_year_masks[year]
 
-        vegetation = sample[self.sentinel2_vars].isel(time_veg=veg_idx)
-        weather = sample[self.era5_vars].isel(time_weather=weather_idx)
-
-        return (
-            self._to_tensor(vegetation),
-            self._to_tensor(weather),
+        veg_arr = torch.as_tensor(
+            np.stack(
+                [sample[var].values[veg_idx] for var in self.sentinel2_vars], axis=1
+            ),
+            dtype=torch.float32,
         )
+        weather_arr = torch.as_tensor(
+            np.stack(
+                [sample[var].values[weather_idx] for var in self.era5_vars], axis=1
+            ),
+            dtype=torch.float32,
+        )
+
+        return veg_arr, weather_arr
+
+    def _preload_sample(self, sample_id, years):
+        """Precompute tensors for all years of a given sample."""
+        sample = self.dataset.isel(sample=sample_id)
+        sample_cache = {}
+        for year in years:
+            sample_cache[year] = self._load_year_tensor(sample, year)
+        return sample_cache
 
     def __len__(self):
         if self.training_pairs is None:
             raise ValueError("training_pairs must be defined in subclass")
         return len(self.training_pairs)
-
-    def _to_tensor(self, data):
-        """Convert xarray data to a PyTorch tensor."""
-        arr = data.to_array().to_numpy()  # shape [variables, time, H, W] maybe
-        arr = torch.as_tensor(arr, dtype=torch.float32)
-
-        if torch.isnan(arr).all() or torch.isinf(arr).any():
-            raise ValueError("Tensor contains only NaNs or infs")
-        return arr.permute(1, 0)  # shape [time, variables]
 
 
 class ContrastiveDataset(BaseDataset):
@@ -107,8 +108,7 @@ class ContrastiveDataset(BaseDataset):
     def __init__(self, dataset_path, sentinel2_vars, era5_vars, years):
 
         super().__init__(dataset_path, sentinel2_vars, era5_vars, years)
-        # Create training pairs
-        self.training_pairs = self._create_training_pairs(years=years)
+        self._create_training_pairs(years=years)
 
     def __getitem__(self, idx) -> dict | None:
         sample_id, year = self.training_pairs[idx]
@@ -134,20 +134,19 @@ class ContrastiveDataset(BaseDataset):
 class ForecastingDataset(BaseDataset):
 
     def __init__(self, dataset_path, sentinel2_vars, era5_vars, years):
-
         super().__init__(dataset_path, sentinel2_vars, era5_vars, years)
-        self.training_pairs = self._create_training_pairs(
-            years=years[:-1]
+        self._create_training_pairs(
+            years=years[1:]
         )  # year + 1 need to be available for forecasting
 
     def __getitem__(self, idx):
 
         sample_id, year = self.training_pairs[idx]
         try:
-            sample = self.dataset.isel(sample=sample_id)
+            sample = self.samples[sample_id]
 
-            veg_hist, weather_hist = self._load_year(sample, year)
-            veg_forecast, weather_forecast = self._load_year(sample, year + 1)
+            veg_hist, weather_hist = sample[year - 1]
+            veg_forecast, weather_forecast = sample[year]
 
             return {
                 "vegetation_history": veg_hist,
