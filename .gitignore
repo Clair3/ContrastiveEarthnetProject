@@ -8,6 +8,9 @@
 *.ckpt
 *.sh
 *.yaml
+*.npz
+*.json
+*.zip
 
 
 # TensorBoard / experiment logs
@@ -16,6 +19,7 @@ preprocessing/logs/
 preprocessing/datasets
 wandb/
 logs/
+outputs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
