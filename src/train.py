@@ -75,11 +75,11 @@ class BaseExperiment:
 
         return [checkpoint, early_stop, lr_monitor]
 
-    def run(self, profile_ressources=False):
+    def run(self, profile_resources=False):
         datamodule = self.build_datamodule()
         model = self.build_model()
 
-        if profile_ressources:
+        if profile_resources:
             print("Running dry-run on single batch to estimate resources...")
             self.estimate_batch_resources(model, datamodule)
             return  # skip full training
@@ -169,22 +169,6 @@ class ContrastiveExperiment(BaseExperiment):
             output_dir=PRED_DIR,
         )
 
-    # def run(self, profile_ressources=False):
-
-
-#
-#     super().run(profile_ressources=profile_ressources)
-#
-#     torch.save(
-#         {
-#             "encoder_veg": self.encoder_veg.state_dict(),
-#             "encoder_weather": self.encoder_weather.state_dict(),
-#             "config": dict(self.config),
-#             "run_id": wandb.run.id,
-#         },
-#         self.save_path,
-#     )
-
 
 class ForecastingExperiment(BaseExperiment):
 
@@ -208,89 +192,170 @@ class ForecastingExperiment(BaseExperiment):
             output_dir=self.output_dir,
         )
 
-    # def run(self, profile_ressources=False):
-
-
-#
-#     super().run(profile_ressources=profile_ressources)
-#
-#     # torch.save(
-#     #     {
-#     #         "model": self.model.state_dict(),
-#     #         "config": dict(self.config),
-#     #         "run_id": wandb.run.id,
-#     #     },
-#     #     self.save_path,
-#     # )
-
-
-def run_experiment(config, data_config, output_dir=None, profile_ressources=False):
-    task = config["task"]
-    if task == "contrastive":
-        experiment = ContrastiveExperiment(config, data_config)
-    elif task == "forecasting":
-        experiment = ForecastingExperiment(config, data_config, output_dir=output_dir)
-    else:
-        raise ValueError(f"Unknown experiment task: {task}")
-
-    experiment.run(profile_ressources=profile_ressources)
-
 
 @contextmanager
-def wandb_run(train_config, group=None, name=None, project="contrastive-earthnet"):
-    wandb.init(project=project, group=group, name=name, config=train_config)
+def wandb_run(config, group=None, name=None, project="contrastive-earthnet"):
+    wandb.init(project=project, group=group, name=name, config=config)
     try:
         yield wandb.config
     finally:
         wandb.finish()
 
 
-def run_k_fold(train_config_file, folds=None, profile_ressources=False):
-    data_config = load_config(CONFIG_DIR / "data_config.yaml")
+def run_experiment(config, data_config, output_dir, profile_resources=False):
+    task = config["task"]
+
+    if task == "contrastive":
+        experiment = ContrastiveExperiment(config, data_config, output_dir)
+    elif task == "forecasting":
+        experiment = ForecastingExperiment(config, data_config, output_dir)
+    else:
+        raise ValueError(f"Unknown experiment task: {task}")
+
+    experiment.run(profile_resources=profile_resources)
+
+
+def get_folds(mode, data_config, predefined_folds=None):
+    if mode == "single" or mode == "tune":
+        return [(data_config["train"], data_config["test"])]
+
+    elif mode == "kfold":
+        if predefined_folds is None:
+            raise ValueError("K-fold mode requires predefined folds")
+        return predefined_folds
+
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+
+def run_pipeline(
+    train_config_file="models/mlp.yaml",
+    data_config_file="data_config.yaml",
+    mode="single",  # "tune", "single", "kfold"
+    folds=None,
+    profile_resources=False,
+):
+    """
+    Run training and evaluation experiments under different execution modes.
+
+    This function is the main entry point for launching experiments. It supports:
+    - single-run training
+    - hyperparameter tuning on a single split
+    - k-fold cross-validation with fixed hyperparameters
+
+    Parameters
+    ----------
+    train_config_file : str
+        Path (relative to CONFIG_DIR) to the training configuration file
+        (e.g., "models/mlp.yaml").
+        Must include a "task" field (e.g., "contrastive" or "forecasting")
+        to select the experiment type. Defines model architecture,
+        training hyperparameters, and related settings; may also specify
+        a sweep configuration for tuning.
+
+    data_config_file : str
+        Path (relative to CONFIG_DIR) to the data configuration file
+        (e.g., "data_config.yaml").
+
+
+    mode : {"single", "tune", "kfold"}, default="single"
+        Execution mode controlling how data splits are used:
+
+        - "single":
+            Runs a standard training/validation/test split using the dataset
+            configuration as defined in `data_config.yaml`.
+
+        - "tune":
+            Runs training on a single fold (same as "single") but stores outputs
+            under a dedicated "tuning" directory. Intended for hyperparameter
+            search or debugging.
+
+        - "kfold":
+            Runs multiple experiments using predefined folds. Each fold defines
+            its own train/validation/test years. Typically used after tuning to
+            evaluate a fixed configuration across multiple splits.
+
+    folds : list of tuple(list[int], list[int]), optional
+        Required when `mode="kfold"`. Each element is a tuple:
+            (train_years, test_years)
+
+        Example:
+            [
+                ([2017, 2018], [2019]),
+                ([2017, 2018, 2019], [2020]),
+            ]
+
+        Ignored for "single" and "tune" modes.
+
+    profile_resources : bool, default=False
+        If True, runs the experiment for a single batch to estimate
+        computational resource usage (e.g., memory, runtime).
+
+    Behavior
+    --------
+    - Loads training and data configurations.
+    - Sets a global random seed for reproducibility.
+    - Iterates over the selected folds depending on the mode.
+    - For each fold:
+        - Updates the data configuration (train/val/test splits).
+        - Creates an output directory.
+        - Starts a Weights & Biases (wandb) run.
+        - Executes the experiment.
+
+    Output Structure
+    ----------------
+    Outputs are stored under:
+
+        PRED_DIR / <model_name> /
+
+    With subdirectories depending on the mode:
+
+        - "single":   single/
+        - "tune":     tuning/
+        - "kfold":    fold_<test_years>/
+
+    Notes
+    -----
+    - In "tune" mode, only a single fold is used, but results are stored
+      separately to avoid overwriting final experiments.
+    - In "kfold" mode, the same training configuration is reused across all folds.
+    - The function assumes that the configuration files are valid and contain
+      all required fields (e.g., "task", "model_name", etc.).
+    """
+    data_config = load_config(CONFIG_DIR / data_config_file)
     train_config = load_config(CONFIG_DIR / train_config_file)
-    output_dir = (
-        PRED_DIR / train_config["model_name"] / f"{data_config['test'][-1]}"
-        if folds is None
-        else PRED_DIR / train_config["model_name"] / "hyper-tuning"
-    )
-    print(f"Output directory: {output_dir}")
+
     seed_everything(42, workers=True)
 
-    if folds is None:
+    base_output_dir = PRED_DIR / train_config["model_name"]
+
+    fold_list = get_folds(mode, data_config, folds)
+
+    for train_years, test_years in fold_list:
+        fold_name = f"{test_years[-1]}" if mode != "single" else "single"
+        output_dir = base_output_dir / ("tuning" if mode == "tune" else fold_name)
+
+        data_config["train"] = train_years
+        data_config["validation"] = test_years
+        data_config["test"] = test_years
+
         with wandb_run(
             train_config,
-            group=f"{train_config['model_name']}",
-            name=f"fold_{data_config['test'][-1]}",
+            group=train_config["model_name"],
+            name=fold_name,
         ) as config:
             run_experiment(
                 config,
                 data_config,
                 output_dir=output_dir,
-                profile_ressources=profile_ressources,
+                profile_resources=profile_resources,
             )
-
-    else:
-        for train_years, test_years in folds:
-            data_config["train"] = train_years
-            data_config["validation"] = test_years
-            data_config["test"] = test_years
-
-            with wandb_run(
-                train_config,
-                group=f"{train_config['model_name']}",
-                name=f"fold_{test_years}",
-            ) as config:
-                run_experiment(
-                    config,
-                    data_config,
-                    output_dir=output_dir,
-                    profile_ressources=profile_ressources,
-                )
 
 
 if __name__ == "__main__":
-    profile_ressources = False  # True  # Set to True for quick resource estimation
+    profile_resources = False  # True  # Set to True for quick resource estimation
     train_config_file = "models/mlp.yaml"
+    data_config_file = "data_config.yaml"
 
     folds = [
         ([2017, 2018], [2018, 2019]),
@@ -298,4 +363,9 @@ if __name__ == "__main__":
         ([2017, 2018, 2019, 2020], [2020, 2021]),
         ([2017, 2018, 2019, 2020, 2021], [2021, 2022]),
     ]
-    run_k_fold(train_config_file=train_config_file, folds=None)
+    run_pipeline(
+        train_config_file=train_config_file,
+        data_config_file=data_config_file,
+        mode="single",  # "tune", "single", "kfold"
+        folds=None,
+    )
