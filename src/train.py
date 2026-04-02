@@ -91,7 +91,7 @@ class BaseExperiment:
         trainer = Trainer(
             max_epochs=self.config.max_epochs,
             accelerator="gpu",
-            devices=1,
+            devices=self.config.gpu_device,
             precision="16-mixed",
             logger=self.logger,
             callbacks=self.build_callbacks(wandb.run.id),
@@ -322,6 +322,9 @@ def run_pipeline(
     - The function assumes that the configuration files are valid and contain
       all required fields (e.g., "task", "model_name", etc.).
     """
+    print(
+        f"Loading training config from {train_config_file} and data config from {data_config_file}..."
+    )
     data_config = load_config(CONFIG_DIR / data_config_file)
     train_config = load_config(CONFIG_DIR / train_config_file)
 
@@ -351,18 +354,19 @@ def run_pipeline(
                 output_dir=output_dir,
                 profile_resources=profile_resources,
             )
+    print("All experiments completed.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--config",
-        default="models/mlp.yaml",
+        "--train_config_file",
+        default="defaults/lstm.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
-        "--data_config",
+        "--data_config_file",
         default="data_config.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
@@ -373,13 +377,12 @@ if __name__ == "__main__":
         help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
     )
     parser.add_argument(
-        "--profile",
+        "--profile_resources",
         action="store_true",
         help="Run a single batch for resource estimation",
     )  # "store_true" means this flag is False by default and becomes True if --profile isincluded in the command line
 
     args = parser.parse_args()
-    print(args)
 
     if args.mode == "kfold" and "sweep" in args.train_config_file.lower():
         print(
@@ -393,11 +396,12 @@ if __name__ == "__main__":
         ([2017, 2018, 2019, 2020], [2020, 2021]),
         ([2017, 2018, 2019, 2020, 2021], [2021, 2022]),
     ]
+    print(f"args are: {args}")
 
     run_pipeline(
-        train_config_file=args.config,
-        data_config_file=args.data_config,
+        train_config_file=args.train_config_file,
+        data_config_file=args.data_config_file,
         mode=args.mode,
         folds=folds if args.mode == "kfold" else None,
-        profile_resources=args.profile,
+        profile_resources=args.profile_resources,
     )
