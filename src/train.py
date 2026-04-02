@@ -4,13 +4,13 @@ import wandb
 import yaml
 import argparse
 import warnings
-import deepcopy
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 torch.set_float32_matmul_precision("medium")
 
 from pathlib import Path
+from copy import deepcopy
 from contextlib import contextmanager
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import WandbLogger
