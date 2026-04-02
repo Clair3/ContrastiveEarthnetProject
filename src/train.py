@@ -2,16 +2,15 @@ import os
 import torch
 import wandb
 import yaml
-import os
-from pathlib import Path
-import torch
-
-torch.set_float32_matmul_precision("medium")
-
+import argparse
 import warnings
+import deepcopy
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+torch.set_float32_matmul_precision("medium")
+
+from pathlib import Path
 from contextlib import contextmanager
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import WandbLogger
@@ -30,7 +29,7 @@ PROJECT_DIR = Path(__file__).parent.parent.resolve()
 CONFIG_DIR = PROJECT_DIR / "configs"
 OUTPUT_DIR = PROJECT_DIR / "outputs"
 CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints"
-PRED_DIR = OUTPUT_DIR / "predictions"
+PREDICTIONS_DIR = OUTPUT_DIR / "predictions"
 
 
 def load_config(config_path: str) -> dict:
@@ -166,7 +165,7 @@ class ContrastiveExperiment(BaseExperiment):
             encoder_weather=encoder_weather,
             lr=float(self.config.lr),
             temperature=self.config.temperature,
-            output_dir=PRED_DIR,
+            output_dir=PREDICTIONS_DIR,
         )
 
 
@@ -306,7 +305,7 @@ def run_pipeline(
     ----------------
     Outputs are stored under:
 
-        PRED_DIR / <model_name> /
+        PREDICTIONS_DIR / <model_name> /
 
     With subdirectories depending on the mode:
 
@@ -325,23 +324,30 @@ def run_pipeline(
     data_config = load_config(CONFIG_DIR / data_config_file)
     train_config = load_config(CONFIG_DIR / train_config_file)
 
+    if mode == "kfold" and "sweep" in train_config_file.lower():
+        raise ValueError(
+            f"K-fold evaluation cannot be run with sweep config '{train_config_file}'. "
+            "Use a fixed hyperparameter config instead."
+        )
+
     seed_everything(42, workers=True)
 
-    base_output_dir = PRED_DIR / train_config["model_name"]
+    base_output_dir = PREDICTIONS_DIR / train_config["model_name"]
 
     fold_list = get_folds(mode, data_config, folds)
 
     for train_years, test_years in fold_list:
         fold_name = f"{test_years[-1]}" if mode != "single" else "single"
         output_dir = base_output_dir / ("tuning" if mode == "tune" else fold_name)
+        fold_config = deepcopy(train_config)
 
         data_config["train"] = train_years
         data_config["validation"] = test_years
         data_config["test"] = test_years
 
         with wandb_run(
-            train_config,
-            group=train_config["model_name"],
+            fold_config,
+            group=fold_config["model_name"],
             name=fold_name,
         ) as config:
             run_experiment(
@@ -353,9 +359,31 @@ def run_pipeline(
 
 
 if __name__ == "__main__":
-    profile_resources = False  # True  # Set to True for quick resource estimation
-    train_config_file = "models/mlp.yaml"
-    data_config_file = "data_config.yaml"
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--config",
+        default="sweep/mlp.yaml",
+        help="Path to training config file (relative to project/configs/)",
+    )
+    parser.add_argument(
+        "--data_config",
+        default="data_config.yaml",
+        help="Path to data config file (relative to project/configs/)",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["single", "tune", "kfold"],
+        default="single",
+        help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Run a single batch for resource estimation",
+    )  # "store_true" means this flag is False by default and becomes True if --profile isincluded in the command line
+
+    args = parser.parse_args()
 
     folds = [
         ([2017, 2018], [2018, 2019]),
@@ -363,9 +391,11 @@ if __name__ == "__main__":
         ([2017, 2018, 2019, 2020], [2020, 2021]),
         ([2017, 2018, 2019, 2020, 2021], [2021, 2022]),
     ]
+
     run_pipeline(
-        train_config_file=train_config_file,
-        data_config_file=data_config_file,
-        mode="single",  # "tune", "single", "kfold"
-        folds=None,
+        train_config_file=args.config,
+        data_config_file=args.data_config,
+        mode=args.mode,
+        folds=folds if args.mode == "kfold" else None,
+        profile_resources=args.profile,
     )
