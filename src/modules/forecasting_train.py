@@ -93,7 +93,6 @@ class ForecastingTrainModule(LightningModule):
             mask=mask.numpy(),
             locations=locations.numpy(),
         )
-
         self.test_outputs.clear()
 
     def configure_optimizers(self):

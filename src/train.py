@@ -1,4 +1,5 @@
 import os
+import sys
 import torch
 import wandb
 import yaml
@@ -165,7 +166,7 @@ class ContrastiveExperiment(BaseExperiment):
             encoder_weather=encoder_weather,
             lr=float(self.config.lr),
             temperature=self.config.temperature,
-            output_dir=PREDICTIONS_DIR,
+            output_dir=self.output_dir,
         )
 
 
@@ -324,12 +325,6 @@ def run_pipeline(
     data_config = load_config(CONFIG_DIR / data_config_file)
     train_config = load_config(CONFIG_DIR / train_config_file)
 
-    if mode == "kfold" and "sweep" in train_config_file.lower():
-        raise ValueError(
-            f"K-fold evaluation cannot be run with sweep config '{train_config_file}'. "
-            "Use a fixed hyperparameter config instead."
-        )
-
     seed_everything(42, workers=True)
 
     base_output_dir = PREDICTIONS_DIR / train_config["model_name"]
@@ -363,7 +358,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--config",
-        default="sweep/mlp.yaml",
+        default="models/mlp.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
@@ -374,7 +369,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         choices=["single", "tune", "kfold"],
-        default="single",
+        default="kfold",
         help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
     )
     parser.add_argument(
@@ -384,6 +379,13 @@ if __name__ == "__main__":
     )  # "store_true" means this flag is False by default and becomes True if --profile isincluded in the command line
 
     args = parser.parse_args()
+    print(args)
+
+    if args.mode == "kfold" and "sweep" in args.train_config_file.lower():
+        print(
+            f"\nERROR: Attempting k-fold evaluation with a sweep config '{args.train_config_file}'!\n Use a fixed hyperparameter config instead to ensure all folds use the same parameters.\n"
+        )
+        sys.exit(1)
 
     folds = [
         ([2017, 2018], [2018, 2019]),
