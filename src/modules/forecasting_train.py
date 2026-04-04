@@ -2,6 +2,7 @@ import torch
 import os
 
 import numpy as np
+import xarray as xr
 from torch import optim
 import torch.nn.functional as F
 import torch.nn as nn
@@ -82,17 +83,37 @@ class ForecastingTrainModule(LightningModule):
         lats = torch.cat([x["locations"][1] for x in self.test_outputs])
         locations = torch.stack([lons, lats], dim=1)
 
-        # Save predictions
-        pred_path = os.path.join(self.output_dir, f"{self.logger.experiment.id}.npz")
+        # Create xarray Dataset
+        ds = xr.Dataset(
+            {
+                "preds": (
+                    ("sample", "time"),
+                    preds.squeeze(-1).cpu().numpy(),
+                ),  # drop feature dim
+                "targets": (("sample", "time"), targets.squeeze(-1).cpu().numpy()),
+                "mask": (("sample", "time"), mask.squeeze(-1).cpu().numpy()),
+                "lon": ("sample", locations[:, 0].cpu().numpy()),
+                "lat": ("sample", locations[:, 1].cpu().numpy()),
+            }
+        )
+
+        # Zarr path
+        pred_path = os.path.join(self.output_dir, f"{self.logger.experiment.id}.zarr")
         print(f"Saving predictions to {pred_path}")
 
-        np.savez_compressed(
+        # Save with chunking for efficiency
+        ds.to_zarr(
             pred_path,
-            preds=preds.numpy(),
-            targets=targets.numpy(),
-            mask=mask.numpy(),
-            locations=locations.numpy(),
+            mode="w",
+            encoding={
+                "preds": {"chunks": (1000, preds.shape[1])},
+                "targets": {"chunks": (1000, targets.shape[1])},
+                "mask": {"chunks": (1000, mask.shape[1])},
+                "lon": {"chunks": (1000,)},
+                "lat": {"chunks": (1000,)},
+            },
         )
+
         self.test_outputs.clear()
 
     def configure_optimizers(self):

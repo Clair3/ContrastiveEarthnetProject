@@ -98,6 +98,11 @@ class BaseDataset(Dataset):
             sample_cache[year] = self._load_year_tensor(sample, year)
         return sample_cache
 
+    def _validate_tensors(self, *tensors):
+        for t in tensors:
+            if torch.isnan(t).all() or torch.isinf(t).any():
+                raise ValueError("Tensor contains only NaNs or infs")
+
     def __len__(self):
         if self.training_pairs is None:
             raise ValueError("training_pairs must be defined in subclass")
@@ -144,6 +149,10 @@ class ForecastingDataset(BaseDataset):
 
             veg_hist, weather_hist = sample[year - 1]
             veg_forecast, weather_forecast = sample[year]
+
+            self._validate_tensors(
+                veg_hist, weather_hist, veg_forecast, weather_forecast
+            )
 
             return {
                 "vegetation_history": veg_hist,

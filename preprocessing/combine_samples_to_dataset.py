@@ -107,7 +107,7 @@ def main():
 
     # Save splits
     print("\n=== Saving datasets and copying to tscratch ===")
-    scratch_path = SCRATCH_DIR / Path(OUTPUT_DIR)
+    scratch_path = SCRATCH_DIR / OUTPUT_DIR
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(scratch_path, exist_ok=True)
 
