@@ -119,8 +119,7 @@ class ContrastiveDataset(BaseDataset):
     def __getitem__(self, idx) -> dict | None:
         sample_id, year = self.training_pairs[idx]
         try:
-            sample = self.samples[sample_id]
-            vegetation, weather = self._load_year(sample, year)
+            vegetation, weather = self.samples[sample_id][year]
 
             data = {
                 "vegetation": vegetation,

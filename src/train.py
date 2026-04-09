@@ -167,7 +167,6 @@ class ContrastiveExperiment(BaseExperiment):
             encoder_weather=encoder_weather,
             lr=float(self.config.lr),
             temperature=self.config.temperature,
-            output_dir=self.output_dir,
         )
 
 
@@ -181,10 +180,12 @@ class ForecastingExperiment(BaseExperiment):
         )
 
     def build_model(self):
+        encoders = getattr(self, "pretrained_encoders", None)
 
         self.model = ModelClass[self.config.model_name](
             data_config=self.data_config,
             config=self.config,
+            pretrained_encoders=encoders,
         )
 
         return ForecastingTrainModule(
@@ -192,6 +193,39 @@ class ForecastingExperiment(BaseExperiment):
             lr=float(self.config.lr),
             output_dir=self.output_dir,
         )
+
+
+class PretrainThenForecastExperiment(BaseExperiment):
+    """
+    Runs contrastive pretraining first, then uses the pretrained encoders
+    for forecasting.
+    """
+
+    def __init__(self, config, data_config, output_dir):
+        super().__init__(config, data_config, output_dir)
+        self.contrastive_experiment = ContrastiveExperiment(
+            config, data_config, output_dir
+        )
+        self.forecasting_experiment = ForecastingExperiment(
+            config, data_config, output_dir
+        )
+
+    def run(self, profile_resources=False):
+        # Step 1: Pretrain contrastive model
+        print("=== Step 1: Contrastive pretraining ===")
+        self.contrastive_experiment.run(profile_resources=profile_resources)
+
+        # Load pretrained encoders
+        encoder_veg = self.contrastive_experiment.encoder_veg
+        encoder_weather = self.contrastive_experiment.encoder_weather
+
+        # Step 2: Forecasting with pretrained encoders
+        print("=== Step 2: Forecasting finetuning ===")
+        self.forecasting_experiment.pretrained_encoders = {
+            "veg": encoder_veg,
+            "weather": encoder_weather,
+        }
+        self.forecasting_experiment.run(profile_resources=profile_resources)
 
 
 @contextmanager
@@ -210,6 +244,8 @@ def run_experiment(config, data_config, output_dir, profile_resources=False):
         experiment = ContrastiveExperiment(config, data_config, output_dir)
     elif task == "forecasting":
         experiment = ForecastingExperiment(config, data_config, output_dir)
+    elif task == "pretrain_then_forecast":
+        experiment = PretrainThenForecastExperiment(config, data_config, output_dir)
     else:
         raise ValueError(f"Unknown experiment task: {task}")
 
@@ -343,13 +379,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config.yaml",
+        default="data_config_contrastive.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--mode",
         choices=["single", "tune", "kfold"],
-        default="kfold",
+        default="single",
         help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
     )
     parser.add_argument(

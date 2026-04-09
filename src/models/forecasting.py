@@ -264,7 +264,7 @@ class TransformerBaselineOld(nn.Module):
 
 
 class TransformerBaseline(nn.Module):
-    def __init__(self, data_config, config):
+    def __init__(self, data_config, config, pretrained_encoders=None):
         super().__init__()
         veg_dim = len(data_config["vegetation"]["variables"])
         weather_dim = len(data_config["weather"]["variables"])
@@ -272,24 +272,29 @@ class TransformerBaseline(nn.Module):
         T_weather = data_config["weather"]["sequence_length"]
         d_model = config.d_model
 
-        self.veg_encoder = TimeSeriesTransformerEncoder(
-            input_dim=veg_dim,
-            sequence_length=T_veg,
-            d_model=d_model,
-            nhead=config.num_heads,
-            num_layers=config.num_layers,
-            dropout=config.dropout,
-            use_cls=False,
-        )
-        self.weather_encoder = TimeSeriesTransformerEncoder(
-            input_dim=weather_dim,
-            sequence_length=T_weather,
-            d_model=d_model,
-            nhead=config.num_heads,
-            num_layers=config.num_layers,
-            dropout=config.dropout,
-            use_cls=False,
-        )
+        if pretrained_encoders is not None:
+            self.veg_encoder = pretrained_encoders["veg"]
+            self.weather_encoder = pretrained_encoders["weather"]
+            print("Loaded pretrained encoders for forecasting.")
+        else:
+            self.veg_encoder = TimeSeriesTransformerEncoder(
+                input_dim=veg_dim,
+                sequence_length=T_veg,
+                d_model=d_model,
+                nhead=config.num_heads,
+                num_layers=config.num_layers,
+                dropout=config.dropout,
+                use_cls=False,
+            )
+            self.weather_encoder = TimeSeriesTransformerEncoder(
+                input_dim=weather_dim,
+                sequence_length=T_weather,
+                d_model=d_model,
+                nhead=config.num_heads,
+                num_layers=config.num_layers,
+                dropout=config.dropout,
+                use_cls=False,
+            )
 
         # --- Decoder: weather_forecast attends to past context ---
         decoder_layer = nn.TransformerDecoderLayer(
@@ -309,9 +314,6 @@ class TransformerBaseline(nn.Module):
         self.head = nn.Linear(d_model, veg_dim)
 
     def forward(self, batch):
-        B, T_veg, _ = batch["vegetation_history"].shape
-        B, T_weather, _ = batch["weather_history"].shape
-
         # Encode past: veg and weather history → sequence of tokens
         veg_mem = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
         weather_mem = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
@@ -320,34 +322,9 @@ class TransformerBaseline(nn.Module):
         memory = torch.cat([veg_mem, weather_mem], dim=1)  # [B, T_veg+T_w, d]
 
         # Decode: weather forecast queries into past memory
-        # This is the natural seq2seq cross-attention
         forecast_query = self.weather_encoder(batch["weather_forecast"])  # [B, T_w, d]
         out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
 
         # Project to vegetation space
         out = self.head(out)  # [B, T_w, veg_dim]
-        return out
-
-
-class CrossAttentionBlock(nn.Module):
-    def __init__(self, d_model, num_heads, dropout):
-        super().__init__()
-        self.cross_attn = nn.MultiheadAttention(
-            d_model, num_heads, dropout=dropout, batch_first=True
-        )
-        self.norm1 = nn.LayerNorm(d_model)
-        self.ff = nn.Sequential(
-            nn.Linear(d_model, 4 * d_model),
-            nn.ReLU(),
-            nn.Linear(4 * d_model, d_model),
-        )
-        self.norm2 = nn.LayerNorm(d_model)
-
-    def forward(self, query, key_value):
-        # Cross-attention
-        attn_out, _ = self.cross_attn(query=query, key=key_value, value=key_value)
-        x = self.norm1(query + attn_out)
-        # Feedforward
-        ff_out = self.ff(x)
-        out = self.norm2(x + ff_out)
         return out
