@@ -48,7 +48,8 @@ class TimeSeriesTransformerEncoder(nn.Module):
             nn.init.zeros_(self.linear_layer.bias)
 
         # Initialize CLS token with small random values
-        nn.init.normal_(self.cls_token, mean=0, std=0.02)
+        if self.use_cls:
+            nn.init.normal_(self.cls_token, mean=0, std=0.02)
 
     def forward(self, x):
         """
@@ -70,8 +71,6 @@ class TimeSeriesTransformerEncoder(nn.Module):
             # Extend mask for CLS token (CLS is always valid)
             cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=x.device)
             padding_mask = torch.cat([cls_mask, padding_mask], dim=1)  # [B, T+1]
-
-        # causal_mask = self.generate_causal_mask(T, x.device)
 
         x = self.transformer(x, src_key_padding_mask=padding_mask)  # [B, T, d_model]
         return self.norm(x[:, 0, :]) if self.use_cls else self.norm(x)

@@ -76,41 +76,40 @@ class ForecastingTrainModule(LightningModule):
         return
 
     def on_test_epoch_end(self):
-        preds = torch.cat([x["preds"] for x in self.test_outputs])
+        predictions = torch.cat([x["preds"] for x in self.test_outputs])
         targets = torch.cat([x["targets"] for x in self.test_outputs])
-        mask = torch.cat([x["mask"] for x in self.test_outputs])
+        masks = torch.cat([x["mask"] for x in self.test_outputs])
         lons = torch.cat([x["locations"][0] for x in self.test_outputs])
         lats = torch.cat([x["locations"][1] for x in self.test_outputs])
         locations = torch.stack([lons, lats], dim=1)
 
-        # Create xarray Dataset
         ds = xr.Dataset(
             {
-                "preds": (
+                "predictions": (
                     ("sample", "time"),
-                    preds.squeeze(-1).cpu().numpy(),
-                ),  # drop feature dim
+                    predictions.squeeze(-1).cpu().numpy(),
+                ),
                 "targets": (("sample", "time"), targets.squeeze(-1).cpu().numpy()),
-                "mask": (("sample", "time"), mask.squeeze(-1).cpu().numpy()),
-                "lon": ("sample", locations[:, 0].cpu().numpy()),
-                "lat": ("sample", locations[:, 1].cpu().numpy()),
-            }
+                "masks": (("sample", "time"), masks.squeeze(-1).cpu().numpy()),
+            },
+            coords={
+                "longitude": ("sample", locations[:, 0].cpu().numpy()),
+                "latitude": ("sample", locations[:, 1].cpu().numpy()),
+            },
         )
-
         # Zarr path
         pred_path = os.path.join(self.output_dir, f"{self.logger.experiment.id}.zarr")
         print(f"Saving predictions to {pred_path}")
 
-        # Save with chunking for efficiency
         ds.to_zarr(
             pred_path,
             mode="w",
             encoding={
-                "preds": {"chunks": (1000, preds.shape[1])},
+                "predictions": {"chunks": (1000, predictions.shape[1])},
                 "targets": {"chunks": (1000, targets.shape[1])},
-                "mask": {"chunks": (1000, mask.shape[1])},
-                "lon": {"chunks": (1000,)},
-                "lat": {"chunks": (1000,)},
+                "masks": {"chunks": (1000, masks.shape[1])},
+                "longitude": {"chunks": (1000,)},
+                "latitude": {"chunks": (1000,)},
             },
         )
 

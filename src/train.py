@@ -338,7 +338,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/lstm.yaml",
+        default="defaults/transformer_contrastive.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
@@ -377,7 +377,7 @@ if __name__ == "__main__":
     run_pipeline(
         train_config_file=args.train_config_file,
         data_config_file=args.data_config_file,
-        mode="single",  # args.mode,
+        mode=args.mode,
         folds=folds if args.mode == "kfold" else None,
         profile_resources=args.profile_resources,
     )

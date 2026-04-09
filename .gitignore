@@ -20,6 +20,8 @@ preprocessing/datasets
 wandb/
 logs/
 outputs/
+evaluation_outputs/
+models_comparisons/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
