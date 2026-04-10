@@ -4,6 +4,8 @@ import os
 import numpy as np
 import xarray as xr
 from torch import optim
+from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+
 import torch.nn.functional as F
 import torch.nn as nn
 from pytorch_lightning import LightningModule
@@ -14,11 +16,11 @@ class ForecastingTrainModule(LightningModule):
     LightningModule for vegetation forecasting.
     """
 
-    def __init__(self, model, output_dir, lr=3e-4):
+    def __init__(self, model, output_dir, config):
         super().__init__()
         self.model = model
+        self.config = config
         self.loss_fn = nn.MSELoss()
-        self.lr = lr
         self.output_dir = output_dir
         self.test_outputs = []
         os.makedirs(self.output_dir, exist_ok=True)
@@ -115,8 +117,35 @@ class ForecastingTrainModule(LightningModule):
 
         self.test_outputs.clear()
 
+    # def configure_optimizers(self):
+    #     return optim.Adam(
+    #         list(self.model.parameters()),
+    #         lr=self.config.lr,
+    #     )
+
     def configure_optimizers(self):
-        return optim.Adam(
-            list(self.model.parameters()),
-            lr=self.lr,
+        lr = float(self.config.lr)
+        total_steps = self.trainer.estimated_stepping_batches
+        print(total_steps)
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(), lr=lr, weight_decay=self.config.weight_decay
         )
+        warmup_steps = int(self.config.warmup_fraction * total_steps)
+        warmup = LinearLR(
+            optimizer,
+            start_factor=1e-6,
+            end_factor=1.0,
+            total_iters=warmup_steps,
+        )
+
+        cosine = CosineAnnealingLR(
+            optimizer,
+            T_max=total_steps - warmup_steps,
+            eta_min=lr * 0.05,
+        )
+
+        scheduler = SequentialLR(
+            optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps]
+        )
+
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}

@@ -26,7 +26,6 @@ from data import ContrastiveDataModule, ForecastingDataModule
 from modules import ContrastiveTrainingModule, ForecastingTrainModule
 from models import TimeSeriesTransformerEncoder, ModelClass
 
-
 PROJECT_DIR = Path(__file__).parent.parent.resolve()
 CONFIG_DIR = PROJECT_DIR / "configs"
 OUTPUT_DIR = PROJECT_DIR / "outputs"
@@ -151,12 +150,22 @@ class ContrastiveExperiment(BaseExperiment):
             input_dim=len(self.data_config["vegetation"]["variables"]),
             sequence_length=self.data_config["vegetation"]["sequence_length"],
             d_model=self.config.d_model,
+            num_heads=self.config.num_heads,
+            num_layers=self.config.num_layers,
+            dropout=self.config.dropout,
+            use_cls=self.config.use_cls,
+            seasonal_positional_encoding=self.config.seasonal_positional_encoding,
         )
 
         encoder_weather = TimeSeriesTransformerEncoder(
             input_dim=len(self.data_config["weather"]["variables"]),
             sequence_length=self.data_config["weather"]["sequence_length"],
             d_model=self.config.d_model,
+            num_heads=self.config.num_heads,
+            num_layers=self.config.num_layers,
+            dropout=self.config.dropout,
+            use_cls=self.config.use_cls,
+            seasonal_positional_encoding=self.config.seasonal_positional_encoding,
         )
 
         self.encoder_veg = encoder_veg
@@ -190,7 +199,7 @@ class ForecastingExperiment(BaseExperiment):
 
         return ForecastingTrainModule(
             model=self.model,
-            lr=float(self.config.lr),
+            config=self.config,
             output_dir=self.output_dir,
         )
 
@@ -374,12 +383,12 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/transformer_contrastive.yaml",
+        default="defaults/transformer_baseline.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config_contrastive.yaml",
+        default="data_config_forecasting.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
     parser.add_argument(

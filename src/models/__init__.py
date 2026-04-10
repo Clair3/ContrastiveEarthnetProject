@@ -1,4 +1,6 @@
 from .encoders import TimeSeriesTransformerEncoder
+
+# from .contrasting import ContrastiveTransformer
 from .forecasting import (
     LSTM,
     PersistenceBaseline,
@@ -15,4 +17,5 @@ ModelClass = {
     "TransformerBaseline": TransformerBaseline,
     "LinearRegressionBaseline": LinearRegressionBaseline,
     "MLP": MLP,
+    # "TransformerContrastive": ContrastiveTransformer,
 }

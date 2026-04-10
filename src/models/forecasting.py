@@ -271,29 +271,41 @@ class TransformerBaseline(nn.Module):
         T_veg = data_config["vegetation"]["sequence_length"]
         T_weather = data_config["weather"]["sequence_length"]
         d_model = config.d_model
+        print(
+            f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
+        )
 
         if pretrained_encoders is not None:
             self.veg_encoder = pretrained_encoders["veg"]
             self.weather_encoder = pretrained_encoders["weather"]
             print("Loaded pretrained encoders for forecasting.")
+            print(
+                config.use_cls,
+                config.seasonal_positional_encoding,
+                config.d_model,
+                config.num_heads,
+                config.num_layers,
+            )
         else:
             self.veg_encoder = TimeSeriesTransformerEncoder(
                 input_dim=veg_dim,
                 sequence_length=T_veg,
                 d_model=d_model,
-                nhead=config.num_heads,
+                num_heads=config.num_heads,
                 num_layers=config.num_layers,
                 dropout=config.dropout,
-                use_cls=False,
+                use_cls=config.use_cls,
+                seasonal_positional_encoding=config.seasonal_positional_encoding,
             )
             self.weather_encoder = TimeSeriesTransformerEncoder(
                 input_dim=weather_dim,
                 sequence_length=T_weather,
                 d_model=d_model,
-                nhead=config.num_heads,
+                num_heads=config.num_heads,
                 num_layers=config.num_layers,
                 dropout=config.dropout,
-                use_cls=False,
+                use_cls=config.use_cls,
+                seasonal_positional_encoding=config.seasonal_positional_encoding,
             )
 
         # --- Decoder: weather_forecast attends to past context ---
@@ -323,6 +335,7 @@ class TransformerBaseline(nn.Module):
 
         # Decode: weather forecast queries into past memory
         forecast_query = self.weather_encoder(batch["weather_forecast"])  # [B, T_w, d]
+        # print(memory.shape, forecast_query.shape)
         out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
 
         # Project to vegetation space
