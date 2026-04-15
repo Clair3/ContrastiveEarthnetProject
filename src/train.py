@@ -189,13 +189,19 @@ class ForecastingExperiment(BaseExperiment):
         )
 
     def build_model(self):
-        encoders = getattr(self, "pretrained_encoders", None)
+        if self.config.model_name == "TransformerBaseline":
+            encoders = getattr(self, "pretrained_encoders", None)
 
-        self.model = ModelClass[self.config.model_name](
-            data_config=self.data_config,
-            config=self.config,
-            pretrained_encoders=encoders,
-        )
+            self.model = ModelClass[self.config.model_name](
+                data_config=self.data_config,
+                config=self.config,
+                pretrained_encoders=encoders,
+            )
+        else:
+            self.model = ModelClass[self.config.model_name](
+                data_config=self.data_config,
+                config=self.config,
+            )
 
         return ForecastingTrainModule(
             model=self.model,
@@ -383,7 +389,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/transformer_baseline.yaml",
+        default="defaults/lstm.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
@@ -394,7 +400,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         choices=["single", "tune", "kfold"],
-        default="single",
+        default="kfold",
         help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
     )
     parser.add_argument(

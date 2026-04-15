@@ -64,9 +64,6 @@ class ProcessTrainDataset:
             ]
         )
 
-    # -------------------
-    # High-level API
-    # -------------------
     def process_variables(self, sample_path: Path) -> xr.Dataset:
 
         ds = xr.open_zarr(sample_path)
@@ -74,16 +71,16 @@ class ProcessTrainDataset:
         # weather = self._process_weather(ds).rename({"time": "time_weather"})
         weather = ds[self.era5_variables].rename({"time": "time_weather"})
 
-        vegetation = self.reindex_all_years(
-            vegetation,
-            temporal_resolution=self.temporal_resolution_veg,
-            time_var="time_veg",
-        )
-        weather = self.reindex_all_years(
-            weather,
-            temporal_resolution=self.temporal_resolution_weather,
-            time_var="time_weather",
-        )
+        # vegetation = self.reindex_all_years(
+        #    vegetation,
+        #    temporal_resolution=self.temporal_resolution_veg,
+        #    time_var="time_veg",
+        # )
+        # weather = self.reindex_all_years(
+        #    weather,
+        #    temporal_resolution=self.temporal_resolution_weather,
+        #    time_var="time_weather",
+        # )
 
         lat, lon = vegetation.location.item()
         out = xr.Dataset(
@@ -95,7 +92,10 @@ class ProcessTrainDataset:
 
         # --- Loop through vegetation variables ---
         for v in vegetation.data_vars:
-            out[v] = vegetation[v].chunk({"time_veg": -1})
+            if "time_veg" in vegetation[v].dims:
+                out[v] = vegetation[v].chunk({"time_veg": -1})
+            else:
+                out[v] = vegetation[v].chunk({"dayofyear": -1})
 
         # --- Loop through weather variables ---
         for w in weather.data_vars:
@@ -133,11 +133,6 @@ class ProcessTrainDataset:
         if veg_index is None:
             raise ValueError("Vegetation index computation failed")
         return veg_index
-
-    # def _process_weather(self, ds: xr.Dataset) -> xr.DataArray:
-    #     weather = ds[self.era5_variables]
-    #     weather = weather_normalization(weather)
-    #     return weather
 
     def reindex_all_years(self, data, temporal_resolution=16, time_var="time"):
         # Get all unique years
@@ -194,9 +189,6 @@ def select_year(
     return data_year
 
 
-# ----------------------------
-# Utility functions for running
-# ----------------------------
 def load_paths_from_dir(input_dir: str | Path) -> List[str]:
     p = Path(input_dir)
     paths = sorted([str(x) for x in p.glob("*/*.zarr")])

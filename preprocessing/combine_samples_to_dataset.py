@@ -76,7 +76,7 @@ def main():
 
     # Configuration
     INPUT_DIR = "datasets/samples_aligned/"
-    OUTPUT_DIR = "datasets/"
+    OUTPUT_DIR = "datasets/aligned.zarr"
     SCRATCH_DIR = Path("/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject")
 
     WEATHER_VARS = [
@@ -112,7 +112,7 @@ def main():
     os.makedirs(scratch_path, exist_ok=True)
 
     if dataset is not None:
-        dataset_path = os.path.join(OUTPUT_DIR, "aligned.zarr")
+        dataset_path = Path(OUTPUT_DIR)
         dataset.to_zarr(dataset_path, mode="w", consolidated=True)
         subprocess.run(
             [

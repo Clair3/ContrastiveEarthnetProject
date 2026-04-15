@@ -160,12 +160,6 @@ class LSTM(nn.Module):
         input_veg = veg_hist[:, -1, :]
         preds = []
 
-        # print(
-        #     torch.isnan(weather_hist).any(),
-        #     torch.isnan(weather_forecast).any(),
-        #     torch.isnan(veg_hist).any(),
-        # )
-
         for t in range(T_future):
             weather_step = weather_forecast[:, t, :]
             lstm_input = torch.cat([input_veg, weather_step], dim=-1).unsqueeze(1)
@@ -190,79 +184,6 @@ class LSTM(nn.Module):
         return torch.cat(preds, dim=1)
 
 
-class TransformerBaselineOld(nn.Module):
-    def __init__(self, data_config, config=None):
-        super().__init__()
-        veg_dim = len(data_config["vegetation"]["variables"])
-        weather_dim = len(data_config["weather"]["variables"])
-        veg_seq_len = data_config["vegetation"]["sequence_length"]
-        weather_seq_len = data_config["weather"]["sequence_length"]
-
-        if veg_seq_len != weather_seq_len:
-            raise ValueError(
-                f"Weather and vegetation sequence lengths must match: {veg_seq_len} vs {weather_seq_len}"
-            )
-
-        d_model = config.d_model if config is not None else 128
-        num_layers = config.num_layers if config is not None else 2
-        dropout = config.dropout if config is not None else 0.2
-        num_heads = config.num_heads if config is not None else 2
-
-        print(
-            f"Initializing Transformer with d_model={d_model}, num_layers={num_layers}, dropout={dropout}, num_heads={num_heads}"
-        )
-
-        sequence_length = veg_seq_len * 2  # Usually 2 years / temporal resolution
-        input_dim = veg_dim + weather_dim + 1  # +1 for year flag
-
-        self.encoder = TimeSeriesTransformerEncoder(
-            input_dim=input_dim,
-            sequence_length=sequence_length,  # veg history + veg forecast
-            d_model=d_model,
-            nhead=num_heads,
-            num_layers=num_layers,
-            dropout=dropout,
-            seasonal_positional_encoding=False,
-        )
-        self.head = nn.Linear(config.d_model, veg_seq_len)  # predict only veg forecast
-        self.model = nn.Sequential(self.encoder, self.head)
-
-    def forward(self, batch):
-        B, T, C_veg = batch["vegetation_history"].shape
-
-        # Prepare vegetation: history + placeholder for forecast
-        veg_forecast_placeholder = torch.full(
-            (B, T, C_veg), float("nan"), device=batch["vegetation_history"].device
-        )
-        veg_seq = torch.cat(
-            [batch["vegetation_history"], veg_forecast_placeholder], dim=1
-        )  # [B, 2*T, C_veg]
-
-        # Prepare weather: history + forecast
-        weather_seq = torch.cat(
-            [batch["weather_history"], batch["weather_forecast"]], dim=1
-        )  # [B, 2*T, C_weather]
-
-        # Year flag: 0 for history, 1 for forecast
-        year_flag = torch.cat(
-            [
-                torch.zeros(B, T, 1, device=weather_seq.device),
-                torch.ones(B, T, 1, device=weather_seq.device),
-            ],
-            dim=1,
-        )
-
-        weather_seq = torch.cat(
-            [weather_seq, year_flag], dim=-1
-        )  # [B, 2*T, C_weather+1]
-
-        x = torch.cat([veg_seq, weather_seq], dim=-1)
-        out = self.model(x)
-        if out.ndim == 2:  # [B, T]
-            out = out.unsqueeze(-1)
-        return out
-
-
 class TransformerBaseline(nn.Module):
     def __init__(self, data_config, config, pretrained_encoders=None):
         super().__init__()
@@ -279,13 +200,7 @@ class TransformerBaseline(nn.Module):
             self.veg_encoder = pretrained_encoders["veg"]
             self.weather_encoder = pretrained_encoders["weather"]
             print("Loaded pretrained encoders for forecasting.")
-            print(
-                config.use_cls,
-                config.seasonal_positional_encoding,
-                config.d_model,
-                config.num_heads,
-                config.num_layers,
-            )
+
         else:
             self.veg_encoder = TimeSeriesTransformerEncoder(
                 input_dim=veg_dim,

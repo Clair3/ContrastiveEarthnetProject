@@ -81,8 +81,8 @@ class ForecastingTrainModule(LightningModule):
         predictions = torch.cat([x["preds"] for x in self.test_outputs])
         targets = torch.cat([x["targets"] for x in self.test_outputs])
         masks = torch.cat([x["mask"] for x in self.test_outputs])
-        lons = torch.cat([x["locations"][0] for x in self.test_outputs])
-        lats = torch.cat([x["locations"][1] for x in self.test_outputs])
+        lats = torch.cat([x["locations"][0] for x in self.test_outputs])
+        lons = torch.cat([x["locations"][1] for x in self.test_outputs])
         locations = torch.stack([lons, lats], dim=1)
 
         ds = xr.Dataset(
@@ -116,12 +116,6 @@ class ForecastingTrainModule(LightningModule):
         )
 
         self.test_outputs.clear()
-
-    # def configure_optimizers(self):
-    #     return optim.Adam(
-    #         list(self.model.parameters()),
-    #         lr=self.config.lr,
-    #     )
 
     def configure_optimizers(self):
         lr = float(self.config.lr)

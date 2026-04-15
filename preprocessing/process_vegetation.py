@@ -5,14 +5,39 @@ import pandas as pd
 from datetime import datetime, timedelta, date
 import numpy as np
 from abc import ABC
+from scipy.signal import savgol_filter
 
 
 class Sentinel2Preprocessing:
     def __init__(self, temporal_resolution=16):
         self.index = "EVI"
-        self.temporal_resolution = 16
+        self.temporal_resolution = temporal_resolution
         self.noise_half_windows = [1]
         self.gapfill = False
+
+    @staticmethod
+    def circular_rolling_mean(arr, window_size=5, min_periods=1):
+        """Apply a rolling mean to a numpy array with cyclic handling.
+        Args:
+            arr (numpy.ndarray): Input array for which the rolling mean is calculated.
+            window_size (int): Number of elements in the rolling window. Default is 5.
+            min_periods (int): Minimum valid (non-NaN) values required to compute the mean. Default is 1.
+        Returns:
+            numpy.ndarray: Array with rolling mean applied, handling NaN values gracefully.
+        """
+        n = arr.shape[0]  # Get the length of the input array
+        result = np.full_like(arr, np.nan)  # Initialize result array with NaNs
+        half_window = window_size // 2  # Determine half the window size for indexing
+        for i in range(n):
+            # Compute cyclic indices for the rolling window
+            indices = [(i + j - half_window) % n for j in range(window_size)]
+            # Extract valid (non-NaN) values from the array within the computed window
+            valid_values = arr[indices][~np.isnan(arr[indices])]
+            # Compute the mean only if enough valid values exist
+            if len(valid_values) >= min_periods:
+                result[i] = np.mean(valid_values)
+        # Replace NaN values in the result where original array had NaNs
+        return np.where(np.isnan(arr), result, arr)
 
     def generate_masked_vegetation_index(self, ds):
         # High-resolution computation
@@ -171,33 +196,33 @@ class Sentinel2Preprocessing:
         mean_seasonal_cycle = data.groupby("time.dayofyear").mean("time", skipna=True)
         # Apply circular padding along the dayofyear axis before rolling
         # # edge case growing season during the change of year
-        # padded_values = np.pad(
-        #     mean_seasonal_cycle.values,
-        #     (
-        #         (smoothing_window, smoothing_window),
-        #         (0, 0),
-        #     ),  # Pad along the dayofyear axis
-        #     mode="wrap",  # Wrap-around to maintain continuity
-        # )
-        #
-        # padded_values = circular_rolling_mean(
-        #     padded_values, window_size=2, min_periods=1
-        # )
-        # padded_values = circular_rolling_mean(
-        #     padded_values, window_size=4, min_periods=1
-        # )
-        #
-        # padded_values = np.nan_to_num(padded_values, nan=0)
-        #
-        # # Step 5: Apply Savitzky-Golay smoothing
-        # smoothed_values = savgol_filter(
-        #     padded_values, smoothing_window, poly_order, axis=0
-        # )
-        # mean_seasonal_cycle = mean_seasonal_cycle.copy(
-        #     data=smoothed_values[smoothing_window:-smoothing_window]
-        # )
-        # # Step 6: Ensure all values are non-negative
-        # mean_seasonal_cycle = mean_seasonal_cycle.where(mean_seasonal_cycle > 0, 0)
+        padded_values = np.pad(
+            mean_seasonal_cycle.values,
+            (
+                (smoothing_window, smoothing_window),
+                (0, 0),
+            ),  # Pad along the dayofyear axis
+            mode="wrap",  # Wrap-around to maintain continuity
+        )
+
+        padded_values = self.circular_rolling_mean(
+            padded_values, window_size=2, min_periods=1
+        )
+        padded_values = self.circular_rolling_mean(
+            padded_values, window_size=4, min_periods=1
+        )
+
+        padded_values = np.nan_to_num(padded_values, nan=0)
+
+        # Step 5: Apply Savitzky-Golay smoothing
+        smoothed_values = savgol_filter(
+            padded_values, smoothing_window, poly_order, axis=0
+        )
+        mean_seasonal_cycle = mean_seasonal_cycle.copy(
+            data=smoothed_values[smoothing_window:-smoothing_window]
+        )
+        # Step 6: Ensure all values are non-negative
+        mean_seasonal_cycle = mean_seasonal_cycle.where(mean_seasonal_cycle > 0, 0)
         return mean_seasonal_cycle
 
     def compute_max_per_period(self, data, period_size=10):

@@ -83,21 +83,26 @@ class ContrastiveTrainingModule(LightningModule):
             lr=self.lr,
         )
 
-    def configure_optimizers2(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        warmup_steps = 1000
-        warmup = LinearLR(
-            optimizer, start_factor=1e6, end_factor=1.0, total_iters=self.warmup_steps
-        )
-
-        cosine = CosineAnnealingLR(
-            optimizer,
-            T_max=self.total_steps - self.warmup_steps,
-            eta_min=self.lr * 0.05,
-        )
-
-        scheduler = SequentialLR(
-            optimizer, schedulers=[warmup, cosine], milestones=[self.warmup_steps]
-        )
-
-        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+    # def configure_optimizers2(self):
+    #    lr = float(self.config.lr)
+    #    total_steps = self.trainer.estimated_stepping_batches
+    #    print(total_steps)
+    #    optimizer = torch.optim.AdamW(
+    #        self.model.parameters(), lr=lr, weight_decay=self.config.weight_decay
+    #    )
+    #    warmup_steps = int(self.config.warmup_fraction * total_steps)
+    #    warmup = LinearLR(
+    #        optimizer,
+    #        start_factor=1e-6,
+    #        end_factor=1.0,
+    #        total_iters=warmup_steps,
+    #    )#
+    #    cosine = CosineAnnealingLR(
+    #        optimizer,
+    #        T_max=total_steps - warmup_steps,
+    #        eta_min=lr * 0.05,
+    #    )#
+    #    scheduler = SequentialLR(
+    #        optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps]
+    #    )#
+    #    return {"optimizer": optimizer, "lr_scheduler": scheduler}
