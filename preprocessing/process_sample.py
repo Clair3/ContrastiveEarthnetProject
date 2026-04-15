@@ -71,16 +71,16 @@ class ProcessTrainDataset:
         # weather = self._process_weather(ds).rename({"time": "time_weather"})
         weather = ds[self.era5_variables].rename({"time": "time_weather"})
 
-        # vegetation = self.reindex_all_years(
-        #    vegetation,
-        #    temporal_resolution=self.temporal_resolution_veg,
-        #    time_var="time_veg",
-        # )
-        # weather = self.reindex_all_years(
-        #    weather,
-        #    temporal_resolution=self.temporal_resolution_weather,
-        #    time_var="time_weather",
-        # )
+        vegetation = self.reindex_all_years(
+            vegetation,
+            temporal_resolution=self.temporal_resolution_veg,
+            time_var="time_veg",
+        )
+        weather = self.reindex_all_years(
+            weather,
+            temporal_resolution=self.temporal_resolution_weather,
+            time_var="time_weather",
+        )
 
         lat, lon = vegetation.location.item()
         out = xr.Dataset(

@@ -129,7 +129,7 @@ class Sentinel2Preprocessing:
         if eligible_indices.size == 0:
             return (None, None)
         random_index = eligible_indices[np.random.choice(eligible_indices.shape[0])]
-        return tuple(random_index)  # (lon_idx, lat_idx)
+        return tuple(random_index)
 
     def _select_random_pixel(self, ds, lon_idx, lat_idx):
         """
