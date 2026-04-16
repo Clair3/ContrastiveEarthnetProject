@@ -12,7 +12,6 @@ def ensure_coordinates(ds):
     if "sample" in ds.dims:
         ds = ds.set_index(sample=("longitude", "latitude"))
         ds = ds.rename(sample="location")
-    print(ds)
     return ds
 
 

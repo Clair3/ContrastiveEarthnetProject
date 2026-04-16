@@ -220,7 +220,9 @@ def main():
 
     # Configuration
     OUTPUT_DIR = "datasets/VIIRS_evi_daily.zarr"
-    SCRATCH_DIR = Path("/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject")
+    SCRATCH_DIR = Path(
+        "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets"
+    )
 
     SAMPLES_PATHS = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/sample_paths.txt"
 
@@ -250,6 +252,11 @@ def main():
 
     ds = ds.sel(time=slice("2012-01-01T12:00:00", "2026-01-01T12:00:00"))
     ds = ds.rename({"locations": "sample"})
+    ds = ds.rename({"lat": "latitude"})
+    ds = ds.rename({"lon": "longitude"})
+
+    ds = ds.transpose("sample", "time")
+
     ds_veg = ds[VEG_VARS].rename({"time": "time_veg"})
     ds_weather = ds[WEATHER_VARS].rename({"time": "time_weather"})
 
@@ -277,7 +284,7 @@ def main():
                 "rsync",
                 "-a",
                 str(dataset_path),
-                str(os.path.join(SCRATCH_DIR, OUTPUT_DIR)),
+                str(SCRATCH_DIR),
             ],
             check=True,
         )

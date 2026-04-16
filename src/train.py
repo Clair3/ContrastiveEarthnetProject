@@ -394,7 +394,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config_Sentinel-2.yaml",
+        default="data_config_VIIRS.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
     parser.add_argument(
