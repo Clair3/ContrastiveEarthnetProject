@@ -9,8 +9,8 @@ from scipy.signal import savgol_filter
 
 
 class Sentinel2Preprocessing:
-    def __init__(self, temporal_resolution=16):
-        self.index = "EVI"
+    def __init__(self, index="evi", temporal_resolution=16):
+        self.index = index
         self.temporal_resolution = temporal_resolution
         self.noise_half_windows = [1]
         self.gapfill = False
@@ -98,7 +98,6 @@ class Sentinel2Preprocessing:
             ds = ds.drop_vars("spatial_ref")
 
         ds["time"] = ds["time"].dt.floor("D")
-        ds = ds.sel(time=slice(date(2017, 3, 1), None))
 
         return ds.rename({"x": "longitude", "y": "latitude"})
 
@@ -143,11 +142,11 @@ class Sentinel2Preprocessing:
 
     def _calculate_vegetation_index(self, ds):
         """Calculates the Vegetation Index."""
-        if self.index in ("EVI_EN", "EVI"):
+        if self.index in ("evi", "EVI"):
             return (2.5 * (ds.B8A - ds.B04)) / (
                 ds.B8A + 6 * ds.B04 - 7.5 * ds.B02 + 1 + 10e-8
             )
-        elif self.index == "NDVI":
+        elif self.index in ("ndvi", "ndvi"):
             return (ds.B8A - ds.B04) / (ds.B8A + ds.B04 + 10e-8)
         else:
             raise ValueError(f"Unknown vegetation index: {self.index}")

@@ -14,7 +14,7 @@ export PYTHONPATH=/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarth
 
 CHUNK_SIZE=5
 LIST="sample_paths.txt"
-OUTDIR="datasets/samples_aligned/"
+OUTDIR="datasets/S2_evi_5d/"
 echo "Output directory: $OUTDIR"
 
 START=$(( SLURM_ARRAY_TASK_ID * CHUNK_SIZE ))

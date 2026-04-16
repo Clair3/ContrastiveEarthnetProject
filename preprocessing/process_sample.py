@@ -38,6 +38,7 @@ class ProcessTrainDataset:
         temporal_resolution_veg: int,
         temporal_resolution_weather: int,
         era5_variables: List[str] | None = None,
+        vegetation_index: str | None = None,
         output_dir: str | Path = "preprocessed/samples_aligned",
     ):
         self.temporal_resolution_veg = int(temporal_resolution_veg)
@@ -63,16 +64,17 @@ class ProcessTrainDataset:
                 "ssr_max",
             ]
         )
+        self.vegetation_index = (
+            vegetation_index if vegetation_index is not None else "evi"
+        )
 
     def process_variables(self, sample_path: Path) -> xr.Dataset:
 
         ds = xr.open_zarr(sample_path)
         vegetation = self._process_vegetation(ds).rename({"time": "time_veg"})
-        # weather = self._process_weather(ds).rename({"time": "time_weather"})
         weather = ds[self.era5_variables].rename({"time": "time_weather"})
-
-        vegetation = self.reindex_all_years(
-            vegetation,
+        vegetation["evi"] = self.reindex_all_years(
+            vegetation["evi"],
             temporal_resolution=self.temporal_resolution_veg,
             time_var="time_veg",
         )
@@ -123,12 +125,10 @@ class ProcessTrainDataset:
             logger.exception(f"Failed processing {path}: {e}")
             return None
 
-    # -------------------
-    # Helpers
-    # -------------------
     def _process_vegetation(self, ds: xr.Dataset) -> xr.DataArray:
         veg_index = Sentinel2Preprocessing(
-            temporal_resolution=self.temporal_resolution_veg
+            index=self.vegetation_index,
+            temporal_resolution=self.temporal_resolution_veg,
         ).generate_masked_vegetation_index(ds)
         if veg_index is None:
             raise ValueError("Vegetation index computation failed")

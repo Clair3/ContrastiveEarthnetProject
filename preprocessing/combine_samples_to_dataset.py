@@ -75,8 +75,8 @@ def main():
     """Main preprocessing pipeline."""
 
     # Configuration
-    INPUT_DIR = "datasets/samples_aligned/"
-    OUTPUT_DIR = "datasets/aligned.zarr"
+    INPUT_DIR = "datasets/S2_evi_5d/"
+    OUTPUT_DIR = "datasets/S2_evi_5d.zarr"
     SCRATCH_DIR = Path("/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject")
 
     WEATHER_VARS = [
@@ -105,7 +105,6 @@ def main():
     print("\n=== Chunking dataset ===")
     dataset = dataset.chunk({"sample": 1000, "time_weather": -1, "time_veg": -1})
 
-    # Save splits
     print("\n=== Saving datasets and copying to tscratch ===")
     scratch_path = SCRATCH_DIR / OUTPUT_DIR
     os.makedirs(OUTPUT_DIR, exist_ok=True)

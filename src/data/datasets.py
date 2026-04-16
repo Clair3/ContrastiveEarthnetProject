@@ -152,6 +152,12 @@ class ForecastingDataset(BaseDataset):
             self._validate_tensors(
                 veg_hist, weather_hist, veg_forecast, weather_forecast
             )
+            print(
+                veg_hist.shape,
+                veg_forecast.shape,
+                weather_hist.shape,
+                weather_forecast.shape,
+            )
 
             return {
                 "vegetation_history": veg_hist,

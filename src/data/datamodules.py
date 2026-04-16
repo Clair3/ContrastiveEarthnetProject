@@ -28,9 +28,9 @@ class ContrastiveDataModule(LightningDataModule):
         self.dataset_path = Path(data_config["path"])
         self.sentinel2_vars = data_config["vegetation"]["variables"]
         self.era5_vars = data_config["weather"]["variables"]
-        self.train_years = data_config["train"]
-        self.val_years = data_config["validation"]
-        self.test_years = data_config["test"]
+        self.train_years = data_config["constrastive"]["train"]
+        self.val_years = data_config["constrastive"]["validation"]
+        self.test_years = data_config["constrastive"]["test"]
 
     def _build_dataset(self, years):
         return ContrastiveDataset(
@@ -73,6 +73,9 @@ class ContrastiveDataModule(LightningDataModule):
 class ForecastingDataModule(ContrastiveDataModule):
     def __init__(self, data_config, batch_size=16, num_workers=16):
         super().__init__(data_config, batch_size, num_workers)
+        self.train_years = data_config["forecasting"]["train"]
+        self.val_years = data_config["forecasting"]["validation"]
+        self.test_years = data_config["forecasting"]["test"]
 
     def _build_dataset(self, years):
         return ForecastingDataset(

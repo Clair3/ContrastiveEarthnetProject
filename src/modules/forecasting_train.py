@@ -119,12 +119,15 @@ class ForecastingTrainModule(LightningModule):
 
     def configure_optimizers(self):
         lr = float(self.config.lr)
+        warmup_fraction = getattr(self.config, "warmup_fraction", 0)
+
         total_steps = self.trainer.estimated_stepping_batches
-        print(total_steps)
         optimizer = torch.optim.AdamW(
-            self.model.parameters(), lr=lr, weight_decay=self.config.weight_decay
+            self.model.parameters(),
+            lr=lr,
+            weight_decay=self.config.weight_decay,  # L2 norm parameters
         )
-        warmup_steps = int(self.config.warmup_fraction * total_steps)
+        warmup_steps = int(warmup_fraction * total_steps)
         warmup = LinearLR(
             optimizer,
             start_factor=1e-6,
