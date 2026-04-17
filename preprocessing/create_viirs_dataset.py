@@ -219,12 +219,12 @@ def main():
     """Main preprocessing pipeline."""
 
     # Configuration
-    OUTPUT_DIR = "datasets/VIIRS_evi_daily.zarr"
+    OUTPUT_DIR = "datasets/VIIRS_evi_daily_10.zarr"
     SCRATCH_DIR = Path(
         "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets"
     )
 
-    SAMPLES_PATHS = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/sample_paths.txt"
+    SAMPLES_PATHS = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/sample_paths_10.txt"
 
     VIIRS_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/VIIRS_gapfilled.zarr/EVIgapfilled_002_QCfix.zarr"  # VIIRS_gapfilled.zarr"
     VIIRS_VARIABLE = "EVIgapfilled_QCfix"
@@ -250,7 +250,8 @@ def main():
     viirs, era = xr.align(viirs, era, join="inner")
     ds = xr.merge([viirs, era], compat="override")
 
-    ds = ds.sel(time=slice("2012-01-01T12:00:00", "2026-01-01T12:00:00"))
+    ds = ds.sel(time=slice("2012-01-01T12:00:00", "2025-12-31T12:00:00"))
+    ds = ds.sel(time=~((ds["time"].dt.month == 2) & (ds["time"].dt.day == 29)))
     ds = ds.rename({"locations": "sample"})
     ds = ds.rename({"lat": "latitude"})
     ds = ds.rename({"lon": "longitude"})
@@ -269,7 +270,7 @@ def main():
     dataset = xr.merge([ds_veg, ds_weather, msc.rename("msc")])
 
     print("\n=== Chunking dataset ===")
-    dataset = dataset.chunk({"sample": 1000, "time_weather": -1, "time_veg": -1})
+    dataset = dataset.chunk({"sample": 1000, "time_weather": 365, "time_veg": 365})
 
     print("\n=== Saving datasets and copying to tscratch ===")
     scratch_path = SCRATCH_DIR / OUTPUT_DIR

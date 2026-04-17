@@ -10,8 +10,9 @@ def ensure_coordinates(ds):
     if "location" in ds.dims:
         ds = cfxr.decode_compress_to_multi_index(ds, "location")
     if "sample" in ds.dims:
-        ds = ds.set_index(sample=("longitude", "latitude"))
+        ds = ds.set_index(sample=("latitude", "longitude"))
         ds = ds.rename(sample="location")
+
     return ds
 
 
@@ -27,9 +28,9 @@ def load_file(filepath, variable):
 
 
 def deseasonalize(data, msc):
-    aligned_msc = msc.sel(dayofyear=data["time.dayofyear"])
-    deseasonalized = data - aligned_msc
-    return deseasonalized.reset_coords("dayofyear", drop=True)
+    data = data.rename(time="dayofyear")
+    deseasonalized = data - msc
+    return deseasonalized
 
 
 def create_quantile_masks(data, thresholds):
@@ -41,10 +42,16 @@ def create_quantile_masks(data, thresholds):
     upper = thresholds.sel(quantile=upper_q)
 
     masks = [
-        data < lower[0],
-        *[(data >= lower[i - 1]) & (data < lower[i]) for i in range(1, len(lower_q))],
-        *[(data > upper[i - 1]) & (data <= upper[i]) for i in range(1, len(upper_q))],
-        data > upper[-1],
+        data < lower.isel(quantile=0),
+        *[
+            (data >= lower.isel(quantile=i - 1)) & (data < lower.isel(quantile=i))
+            for i in range(1, len(lower_q))
+        ],
+        *[
+            (data > upper.isel(quantile=i - 1)) & (data <= upper.isel(quantile=i))
+            for i in range(1, len(upper_q))
+        ],
+        data > upper.isel(quantile=-1),
     ]
     return masks
 
@@ -53,12 +60,12 @@ def apply_thresholds(data, thresholds):
     masks = create_quantile_masks(data, thresholds)
     quantiles = thresholds["quantile"]
 
-    out = xr.full_like(data.astype(float), np.nan)
+    extremes = xr.full_like(data.astype(float), np.nan)
 
     for i, mask in enumerate(masks):
-        out = xr.where(mask, quantiles[i], out)
+        extremes = xr.where(mask, quantiles[i], extremes)
 
-    return out
+    return extremes
 
 
 def compute_percentiles(
@@ -70,13 +77,11 @@ def compute_percentiles(
     """
     Evaluates ML model outputs using non-trivial percentile binning.
     """
+    vegetation_index = load_file(vegetation_index_path, variable)
 
-    msc = load_file(msc_path, "msc")  # .sel(location=vegetation_index.location)
-    thresholds = load_file(thresholds_path, "thresholds")  # .sel(
-    #     location=vegetation_index.location
-    # )
-    vegetation_index = load_file(vegetation_index_path, variable).sel(
-        location=msc.location
+    msc = load_file(msc_path, "msc").sel(location=vegetation_index.location)
+    thresholds = load_file(thresholds_path, "thresholds").sel(
+        location=vegetation_index.location
     )
 
     if vegetation_index is None or msc is None:
@@ -84,7 +89,13 @@ def compute_percentiles(
 
     # 1. Deseasonalize
     data = deseasonalize(vegetation_index, msc)
-
+    data = data.chunk({"location": 1000, "dayofyear": -1})
+    thresholds = thresholds.chunk(
+        {
+            "location": 1000,
+            "quantile": -1,
+        }
+    )
     # 2. Apply thresholds
     result = apply_thresholds(
         data=data,
@@ -94,9 +105,12 @@ def compute_percentiles(
     return result
 
 
-result = compute_percentiles(
-    vegetation_index_path="/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/outputs/predictions/TransformerBaseline/2026-04-14_10-40-03/2021/ueclsrgz.zarr",
-    msc_path="/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2026-04-15_16:38:59_ML_aligned/EVI/msc.zarr",
-    thresholds_path="/Net/Groups/BGI/scratch/crobin/PythonProjects/ExtremesProject/experiments/2026-04-15_16:38:59_ML_aligned/EVI/thresholds.zarr",
+predicted_extremes = compute_percentiles(
+    vegetation_index_path="/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/outputs/predictions/TransformerBaseline/2026-04-16_16-15-04/2019/5unz2x9j.zarr",
+    msc_path="/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/percentiles/S2_evi_5d_eco_clusters/msc.zarr",
+    thresholds_path="/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/percentiles/S2_evi_5d_eco_clusters/thresholds.zarr",
     variable="predictions",
 )
+print(predicted_extremes)
+
+# F1 score

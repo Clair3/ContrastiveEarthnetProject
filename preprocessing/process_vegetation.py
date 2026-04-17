@@ -98,6 +98,7 @@ class Sentinel2Preprocessing:
             ds = ds.drop_vars("spatial_ref")
 
         ds["time"] = ds["time"].dt.floor("D")
+        ds = ds.sel(time=slice(date(2017, 1, 1), None))
 
         return ds.rename({"x": "longitude", "y": "latitude"})
 
