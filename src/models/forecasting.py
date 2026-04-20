@@ -1,7 +1,16 @@
 import torch
 import torch.nn as nn
 from .encoders import TimeSeriesTransformerEncoder
+from .positional_encoding import ClassicPositionalEncoding
 import torch.nn.functional as F
+
+
+def _cfg_get(config, key, default):
+    if hasattr(config, key):
+        return getattr(config, key)
+    if isinstance(config, dict):
+        return config.get(key, default)
+    return default
 
 
 class PersistenceBaseline(nn.Module):
@@ -256,3 +265,243 @@ class TransformerBaseline(nn.Module):
         # Project to vegetation space
         out = self.head(out)  # [B, T_w, veg_dim]
         return out
+
+
+class ContextFormerForecast(nn.Module):
+    def __init__(self, data_config, config, pretrained_encoders=None):
+        super().__init__()
+        veg_dim = len(data_config["vegetation"]["variables"])
+        weather_dim = len(data_config["weather"]["variables"])
+        self.veg_seq_len = data_config["vegetation"]["sequence_length"]
+        self.weather_seq_len = data_config["weather"]["sequence_length"]
+
+        d_model = config.d_model
+        num_heads = config.num_heads
+        dropout = config.dropout
+        patch_size = _cfg_get(config, "patch_size", 5)
+        patch_encoder_layers = _cfg_get(config, "patch_encoder_layers", 1)
+        context_layers = _cfg_get(config, "context_layers", 2)
+        decoder_layers = _cfg_get(config, "decoder_layers", config.num_layers)
+        num_context_tokens = _cfg_get(config, "num_context_tokens", 16)
+        self.predict_delta = _cfg_get(config, "predict_delta", True)
+
+        self.veg_patch_encoder = TemporalPatchEncoder(
+            input_dim=veg_dim,
+            sequence_length=self.veg_seq_len,
+            patch_size=patch_size,
+            d_model=d_model,
+            num_heads=num_heads,
+            num_layers=patch_encoder_layers,
+            dropout=dropout,
+        )
+        self.weather_history_patch_encoder = TemporalPatchEncoder(
+            input_dim=weather_dim,
+            sequence_length=self.weather_seq_len,
+            patch_size=patch_size,
+            d_model=d_model,
+            num_heads=num_heads,
+            num_layers=patch_encoder_layers,
+            dropout=dropout,
+        )
+        self.weather_forecast_patch_encoder = TemporalPatchEncoder(
+            input_dim=weather_dim,
+            sequence_length=self.weather_seq_len,
+            patch_size=patch_size,
+            d_model=d_model,
+            num_heads=num_heads,
+            num_layers=patch_encoder_layers,
+            dropout=dropout,
+        )
+
+        self.context_tokens = nn.Parameter(torch.randn(1, num_context_tokens, d_model))
+        self.history_role_embedding = nn.Parameter(torch.randn(1, 1, d_model))
+        self.weather_role_embedding = nn.Parameter(torch.randn(1, 1, d_model))
+        self.forecast_role_embedding = nn.Parameter(torch.randn(1, 1, d_model))
+
+        self.context_cross_blocks = nn.ModuleList(
+            [
+                CrossAttentionBlock(
+                    d_model=d_model, num_heads=num_heads, dropout=dropout
+                )
+                for _ in range(context_layers)
+            ]
+        )
+        self.context_self_blocks = nn.ModuleList(
+            [
+                SelfAttentionBlock(
+                    d_model=d_model, num_heads=num_heads, dropout=dropout
+                )
+                for _ in range(context_layers)
+            ]
+        )
+        self.decoder_self_blocks = nn.ModuleList(
+            [
+                SelfAttentionBlock(
+                    d_model=d_model, num_heads=num_heads, dropout=dropout
+                )
+                for _ in range(decoder_layers)
+            ]
+        )
+        self.decoder_cross_blocks = nn.ModuleList(
+            [
+                CrossAttentionBlock(
+                    d_model=d_model, num_heads=num_heads, dropout=dropout
+                )
+                for _ in range(decoder_layers)
+            ]
+        )
+
+        self.output_projection = nn.Linear(d_model, patch_size * veg_dim)
+        self.patch_size = patch_size
+        self.num_forecast_patches = self.weather_forecast_patch_encoder.num_patches
+
+    def forward(self, batch):
+        veg_tokens = (
+            self.veg_patch_encoder(batch["vegetation_history"])
+            + self.history_role_embedding
+        )
+        weather_history_tokens = (
+            self.weather_history_patch_encoder(batch["weather_history"])
+            + self.history_role_embedding
+            + self.weather_role_embedding
+        )
+        history_tokens = torch.cat([veg_tokens, weather_history_tokens], dim=1)
+
+        context_tokens = self.context_tokens.expand(history_tokens.size(0), -1, -1)
+        for cross_block, self_block in zip(
+            self.context_cross_blocks, self.context_self_blocks
+        ):
+            context_tokens = cross_block(context_tokens, history_tokens)
+            context_tokens = self_block(context_tokens)
+
+        future_tokens = (
+            self.weather_forecast_patch_encoder(batch["weather_forecast"])
+            + self.forecast_role_embedding
+            + self.weather_role_embedding
+        )
+        for self_block, cross_block in zip(
+            self.decoder_self_blocks, self.decoder_cross_blocks
+        ):
+            future_tokens = self_block(future_tokens)
+            future_tokens = cross_block(future_tokens, context_tokens)
+
+        out = self.output_projection(future_tokens)
+        out = out.view(out.size(0), self.num_forecast_patches * self.patch_size, -1)
+        out = out[:, : self.veg_seq_len, :]
+
+        if self.predict_delta:
+            out = out + batch["vegetation_history"][:, -1:, :]
+
+        return out
+
+
+class TemporalPatchEncoder(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        sequence_length,
+        patch_size,
+        d_model,
+        num_heads,
+        num_layers,
+        dropout,
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.sequence_length = sequence_length
+        self.patch_size = patch_size
+        self.num_patches = (sequence_length + patch_size - 1) // patch_size
+        self.padded_length = self.num_patches * patch_size
+
+        self.patch_projection = nn.Linear(patch_size * input_dim, d_model)
+        self.positional_encoding = ClassicPositionalEncoding(
+            d_model, max_len=self.num_patches
+        )
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=num_heads,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+        if seq_len != self.sequence_length:
+            raise ValueError(
+                f"Expected sequence length {self.sequence_length}, received {seq_len}"
+            )
+
+        pad_len = self.padded_length - seq_len
+        if pad_len > 0:
+            x = F.pad(x, (0, 0, 0, pad_len), value=float("nan"))
+
+        x = x.view(batch_size, self.num_patches, self.patch_size, self.input_dim)
+        padding_mask = torch.isnan(x).all(dim=-1).all(dim=-1)
+
+        x = torch.nan_to_num(x, nan=0.0).flatten(2)
+        x = self.patch_projection(x)
+        x = self.positional_encoding(x)
+        x = self.transformer(x, src_key_padding_mask=padding_mask)
+        return self.norm(x)
+
+
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, d_model, num_heads, dropout):
+        super().__init__()
+        self.query_norm = nn.LayerNorm(d_model)
+        self.context_norm = nn.LayerNorm(d_model)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.ffn_norm = nn.LayerNorm(d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, query_tokens, context_tokens):
+        attn_out, _ = self.attention(
+            self.query_norm(query_tokens),
+            self.context_norm(context_tokens),
+            self.context_norm(context_tokens),
+        )
+        query_tokens = query_tokens + self.dropout(attn_out)
+        query_tokens = query_tokens + self.dropout(
+            self.ffn(self.ffn_norm(query_tokens))
+        )
+        return query_tokens
+
+
+class SelfAttentionBlock(nn.Module):
+    def __init__(self, d_model, num_heads, dropout):
+        super().__init__()
+        self.norm = nn.LayerNorm(d_model)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.ffn_norm = nn.LayerNorm(d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        attn_out, _ = self.attention(self.norm(x), self.norm(x), self.norm(x))
+        x = x + self.dropout(attn_out)
+        x = x + self.dropout(self.ffn(self.ffn_norm(x)))
+        return x

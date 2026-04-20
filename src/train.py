@@ -40,10 +40,9 @@ def load_config(config_path: str) -> dict:
 
 
 class BaseExperiment:
-    def __init__(self, config, data_config, output_dir):
+    def __init__(self, config, data_config):
         self.config = config
         self.data_config = data_config
-        self.output_dir = output_dir
 
     def build_datamodule(self):
         raise NotImplementedError
@@ -206,7 +205,6 @@ class ForecastingExperiment(BaseExperiment):
         return ForecastingTrainModule(
             model=self.model,
             config=self.config,
-            output_dir=self.output_dir,
         )
 
 
@@ -216,14 +214,10 @@ class PretrainThenForecastExperiment(BaseExperiment):
     for forecasting.
     """
 
-    def __init__(self, config, data_config, output_dir):
-        super().__init__(config, data_config, output_dir)
-        self.contrastive_experiment = ContrastiveExperiment(
-            config, data_config, output_dir
-        )
-        self.forecasting_experiment = ForecastingExperiment(
-            config, data_config, output_dir
-        )
+    def __init__(self, config, data_config):
+        super().__init__(config, data_config)
+        self.contrastive_experiment = ContrastiveExperiment(config, data_config)
+        self.forecasting_experiment = ForecastingExperiment(config, data_config)
 
     def run(self, profile_resources=False):
         # Step 1: Pretrain contrastive model
@@ -252,15 +246,15 @@ def wandb_run(config, group=None, project="contrastive-earthnet"):
         run.finish()
 
 
-def run_experiment(config, data_config, output_dir, profile_resources=False):
+def run_experiment(config, data_config, profile_resources=False):
     task = config["task"]
 
     if task == "contrastive":
-        experiment = ContrastiveExperiment(config, data_config, output_dir)
+        experiment = ContrastiveExperiment(config, data_config)
     elif task == "forecasting":
-        experiment = ForecastingExperiment(config, data_config, output_dir)
+        experiment = ForecastingExperiment(config, data_config)
     elif task == "pretrain_then_forecast":
-        experiment = PretrainThenForecastExperiment(config, data_config, output_dir)
+        experiment = PretrainThenForecastExperiment(config, data_config)
     else:
         raise ValueError(f"Unknown experiment task: {task}")
 
@@ -356,14 +350,19 @@ def run_pipeline(
 
     seed_everything(42, workers=True)
 
-    base_output_dir = PREDICTIONS_DIR / train_config["model_name"]
+    base_output_dir = (
+        PREDICTIONS_DIR
+        / data_config["vegetation"]["sensor"]
+        / train_config["model_name"]
+    )
     time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     fold_list = get_folds(mode, data_config, folds)
 
     for train_years, test_years in fold_list:
         folder = f"{time}/{test_years[-1]}" if mode == "kfold" else f"{mode}"
-        output_dir = base_output_dir / folder
+        train_config["output_dir"] = base_output_dir / folder
+
         fold_config = deepcopy(train_config)
 
         data_config["train"] = train_years
@@ -377,7 +376,6 @@ def run_pipeline(
             run_experiment(
                 config,
                 data_config,
-                output_dir=output_dir,
                 profile_resources=profile_resources,
             )
 

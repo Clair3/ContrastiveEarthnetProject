@@ -1,7 +1,7 @@
 import xarray as xr
 import numpy as np
 import torch
-
+import logging
 import pandas as pd
 from torch.utils.data import Dataset
 
@@ -132,10 +132,17 @@ class ContrastiveDataset(BaseDataset):
             return None
 
 
-class ForecastingDataset(BaseDataset):
+class ForecastingTrainDataset(BaseDataset):
 
-    def __init__(self, dataset_path, sentinel2_vars, era5_vars, years):
+    def __init__(
+        self,
+        dataset_path,
+        sentinel2_vars,
+        era5_vars,
+        years,
+    ):
         super().__init__(dataset_path, sentinel2_vars, era5_vars, years)
+
         self._create_training_pairs(
             years=years[1:]
         )  # year + 1 need to be available for forecasting
@@ -158,7 +165,99 @@ class ForecastingDataset(BaseDataset):
                 "weather_history": weather_hist,
                 "vegetation_forecast": veg_forecast,
                 "weather_forecast": weather_forecast,
+            }
+        except Exception as e:
+            # logging.warning(f"Skipping {(sample_id, year)}: {e}")
+            return None
+
+
+class ForecastingValDataset(BaseDataset):
+
+    def __init__(
+        self,
+        dataset_path,
+        thresholds_path,
+        percentiles_path,
+        sentinel2_vars,
+        era5_vars,
+        years,
+    ):
+        super().__init__(dataset_path, sentinel2_vars, era5_vars, years)
+        self._create_training_pairs(
+            years=years[1:]
+        )  # year + 1 need to be available for forecasting
+        self.extremes_dataset = self.additional_dataset(  # could technically download only years[1:], but veg_idx might be an issue
+            dataset_path=percentiles_path, years=years
+        )
+        self.extremes = [
+            self._preload_additional_variable(i, years) for i in range(self.num_samples)
+        ]
+
+    def additional_dataset(self, dataset_path: str, years: list[int]) -> xr.Dataset:
+        """
+        Create a dataset split containing only data from specified years.
+
+        Args:
+            dataset: Input dataset with time_veg and time_weather dimensions
+            years: List of years to include in this split
+
+        Returns:
+            Dataset filtered to only include samples from the specified years
+        """
+        dataset = xr.open_zarr(dataset_path)
+        dataset = dataset.chunk({"location": 1000, "time": 365})
+
+        if "location" in dataset.dims:
+            dataset = dataset.reset_index("location")
+            dataset = dataset.rename(location="sample")
+        if "time" in dataset.dims:
+            dataset = dataset.sel(
+                time=pd.DatetimeIndex(dataset.time.values).year.isin(years),
+            )
+            dataset = dataset.rename(time="time_veg")
+        return dataset.load()
+
+    def _load_year_additional_tensor(self, sample, year, variables):
+        veg_idx = self.veg_year_masks[year]
+        veg_arr = torch.as_tensor(
+            np.stack([sample[var].values[veg_idx] for var in variables], axis=1),
+            dtype=torch.float32,
+        )
+        return veg_arr
+
+    def _preload_additional_variable(self, sample_id, years):
+        """Precompute tensors for all years of a given sample."""
+        sample = self.extremes_dataset.isel(sample=sample_id)
+        sample_cache = {}
+        for year in years:
+            sample_cache[year] = self._load_year_additional_tensor(
+                sample, year, ["extremes"]
+            )
+        return sample_cache
+
+    def __getitem__(self, idx):
+
+        sample_id, year = self.training_pairs[idx]
+        try:
+            sample = self.samples[sample_id]
+
+            veg_hist, weather_hist = sample[year - 1]
+            veg_forecast, weather_forecast = sample[year]
+
+            percentiles_forecast = self.extremes[sample_id][year]
+
+            self._validate_tensors(
+                veg_hist, weather_hist, veg_forecast, weather_forecast
+            )
+
+            return {
+                "vegetation_history": veg_hist,
+                "weather_history": weather_hist,
+                "vegetation_forecast": veg_forecast,
+                "weather_forecast": weather_forecast,
+                "percentiles_forecast": percentiles_forecast,
                 "location": self.locations[sample_id],
+                "year": year,
             }
         except Exception as e:
             # logging.warning(f"Skipping {(sample_id, year)}: {e}")

@@ -4,7 +4,7 @@ from pytorch_lightning import LightningDataModule
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data import DataLoader
 
-from .datasets import ContrastiveDataset, ForecastingDataset
+from .datasets import ContrastiveDataset, ForecastingTrainDataset, ForecastingValDataset
 from .batch_sampler import BatchSampler
 
 
@@ -28,6 +28,7 @@ class ContrastiveDataModule(LightningDataModule):
         self.dataset_path = Path(data_config["path"])
         self.sentinel2_vars = data_config["vegetation"]["variables"]
         self.era5_vars = data_config["weather"]["variables"]
+
         self.train_years = data_config["contrastive"]["train"]
         self.val_years = data_config["contrastive"]["validation"]
         self.test_years = data_config["contrastive"]["test"]
@@ -76,10 +77,27 @@ class ForecastingDataModule(ContrastiveDataModule):
         self.train_years = data_config["forecasting"]["train"]
         self.val_years = data_config["forecasting"]["validation"]
         self.test_years = data_config["forecasting"]["test"]
+        self.thresholds_path = data_config["thresholds_path"]
+        self.percentiles_path = data_config["percentiles_path"]
 
-    def _build_dataset(self, years):
-        return ForecastingDataset(
+    def setup(self, stage=None):
+        self.train_dataset = self._build_train_dataset(years=self.train_years)
+        self.val_dataset = self._build_val_dataset(years=self.val_years)
+        self.test_dataset = self._build_val_dataset(years=self.test_years)
+
+    def _build_train_dataset(self, years):
+        return ForecastingTrainDataset(
             dataset_path=self.dataset_path,
+            sentinel2_vars=self.sentinel2_vars,
+            era5_vars=self.era5_vars,
+            years=years,
+        )
+
+    def _build_val_dataset(self, years):
+        return ForecastingValDataset(
+            dataset_path=self.dataset_path,
+            thresholds_path=self.thresholds_path,
+            percentiles_path=self.percentiles_path,
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
             years=years,
