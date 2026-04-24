@@ -1,4 +1,8 @@
-from .encoders import TimeSeriesTransformerEncoder
+from .encoders import (
+    TimeSeriesTransformerEncoder,
+    ContrastiveTransformer,
+    ContrastiveHead,
+)
 
 # from .contrasting import ContrastiveTransformer
 from .forecasting import (

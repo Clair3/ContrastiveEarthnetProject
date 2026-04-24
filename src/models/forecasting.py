@@ -102,7 +102,6 @@ class MLP(nn.Module):
         veg = torch.nan_to_num(veg_hist, nan=0.0)
         weather = torch.nan_to_num(weather, nan=0.0)
         forecast = torch.nan_to_num(forecast, nan=0.0)
-        # print(veg.shape, weather.shape, forecast.shape)
 
         x = torch.cat(
             [veg.flatten(1), weather.flatten(1), forecast.flatten(1)],
@@ -213,16 +212,17 @@ class TransformerBaseline(nn.Module):
         T_veg = data_config["vegetation"]["sequence_length"]
         T_weather = data_config["weather"]["sequence_length"]
         d_model = config.d_model
-        print(
-            f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
-        )
 
         if pretrained_encoders is not None:
+            print("Using pretrained encoders for forecasting...")
             self.veg_encoder = pretrained_encoders["veg"]
             self.weather_encoder = pretrained_encoders["weather"]
             print("Loaded pretrained encoders for forecasting.")
 
         else:
+            print(
+                f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
+            )
             self.veg_encoder = TimeSeriesTransformerEncoder(
                 input_dim=veg_dim,
                 sequence_length=T_veg,
@@ -263,14 +263,16 @@ class TransformerBaseline(nn.Module):
 
     def forward(self, batch):
         # Encode past: veg and weather history → sequence of tokens
-        veg_mem = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
-        weather_mem = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
+        veg_mem, _ = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
+        weather_mem, _ = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
 
         # Past memory = concat along sequence dim (not feature dim)
         memory = torch.cat([veg_mem, weather_mem], dim=1)  # [B, T_veg+T_w, d]
 
         # Decode: weather forecast queries into past memory
-        forecast_query = self.weather_encoder(batch["weather_forecast"])  # [B, T_w, d]
+        forecast_query, _ = self.weather_encoder(
+            batch["weather_forecast"]
+        )  # [B, T_w, d]
         # print(memory.shape, forecast_query.shape)
         out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
 
