@@ -11,21 +11,21 @@ class TimeSeriesTransformerEncoder(nn.Module):
         sequence_length,
         use_cls,
         seasonal_positional_encoding,
-        d_model=128,
-        num_heads=4,
-        num_layers=2,
-        dropout=0.1,
+        d_model,
+        num_heads,
+        num_layers,
+        dropout,
     ):
         super().__init__()
-        # print(
-        #     input_dim,
-        #     sequence_length,
-        #     use_cls,
-        #     seasonal_positional_encoding,
-        #     d_model,
-        #     num_heads,
-        #     num_layers,
-        # )
+        print(
+            input_dim,
+            sequence_length,
+            use_cls,
+            seasonal_positional_encoding,
+            d_model,
+            num_heads,
+            num_layers,
+        )
         self.use_cls = use_cls
         self.linear_layer = nn.Linear(input_dim, d_model)
 

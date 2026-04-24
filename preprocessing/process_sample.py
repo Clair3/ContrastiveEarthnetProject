@@ -73,16 +73,16 @@ class ProcessTrainDataset:
         ds = xr.open_zarr(sample_path)
         vegetation = self._process_vegetation(ds).rename({"time": "time_veg"})
         weather = ds[self.era5_variables].rename({"time": "time_weather"})
-        vegetation["evi"] = self.reindex_all_years(
-            vegetation["evi"],
-            temporal_resolution=self.temporal_resolution_veg,
-            time_var="time_veg",
-        )
-        weather = self.reindex_all_years(
-            weather,
-            temporal_resolution=self.temporal_resolution_weather,
-            time_var="time_weather",
-        )
+        # vegetation["evi"] = self.reindex_all_years(
+        #     vegetation["evi"],
+        #     temporal_resolution=self.temporal_resolution_veg,
+        #     time_var="time_veg",
+        # )
+        # weather = self.reindex_all_years(
+        #     weather,
+        #     temporal_resolution=self.temporal_resolution_weather,
+        #     time_var="time_weather",
+        # )
 
         lat, lon = vegetation.location.item()
         out = xr.Dataset(
@@ -140,7 +140,6 @@ class ProcessTrainDataset:
 
         reindexed_years = []
         for y in years:
-            # Reuse your function
             reindexed_year = select_year(
                 data,
                 selected_year=int(y),

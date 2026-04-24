@@ -3,6 +3,11 @@ from torch import optim
 import torch.nn.functional as F
 import torch.nn as nn
 from pytorch_lightning import LightningModule
+import torch
+import os
+
+from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+
 
 from loss import info_nce_loss
 
@@ -83,26 +88,28 @@ class ContrastiveTrainingModule(LightningModule):
             lr=self.lr,
         )
 
-    # def configure_optimizers2(self):
-    #    lr = float(self.config.lr)
-    #    total_steps = self.trainer.estimated_stepping_batches
-    #    print(total_steps)
-    #    optimizer = torch.optim.AdamW(
-    #        self.model.parameters(), lr=lr, weight_decay=self.config.weight_decay
-    #    )
-    #    warmup_steps = int(self.config.warmup_fraction * total_steps)
-    #    warmup = LinearLR(
-    #        optimizer,
-    #        start_factor=1e-6,
-    #        end_factor=1.0,
-    #        total_iters=warmup_steps,
-    #    )#
-    #    cosine = CosineAnnealingLR(
-    #        optimizer,
-    #        T_max=total_steps - warmup_steps,
-    #        eta_min=lr * 0.05,
-    #    )#
-    #    scheduler = SequentialLR(
-    #        optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps]
-    #    )#
-    #    return {"optimizer": optimizer, "lr_scheduler": scheduler}
+    def configure_optimizers2(self):
+        lr = float(self.config.lr)
+        total_steps = self.trainer.estimated_stepping_batches
+        optimizer = torch.optim.AdamW(
+            list(self.encoder_veg.parameters())
+            + list(self.encoder_weather.parameters()),
+            lr=lr,
+            weight_decay=self.config.weight_decay,
+        )
+        warmup_steps = int(self.config.warmup_fraction * total_steps)
+        warmup = LinearLR(
+            optimizer,
+            start_factor=1e-6,
+            end_factor=1.0,
+            total_iters=warmup_steps,
+        )  #
+        cosine = CosineAnnealingLR(
+            optimizer,
+            T_max=total_steps - warmup_steps,
+            eta_min=lr * 0.05,
+        )  #
+        scheduler = SequentialLR(
+            optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps]
+        )  #
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}

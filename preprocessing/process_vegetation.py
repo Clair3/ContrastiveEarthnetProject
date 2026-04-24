@@ -177,7 +177,6 @@ class Sentinel2Preprocessing:
         # Apply cloud mask if available
         if "cloudmask_en" in ds.data_vars:
             mask = mask.where(ds.cloudmask_en == 0, np.nan)
-
         return mask
 
     def _has_excessive_nan(self, data):

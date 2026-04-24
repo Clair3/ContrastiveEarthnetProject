@@ -75,9 +75,11 @@ def main():
     """Main preprocessing pipeline."""
 
     # Configuration
-    INPUT_DIR = "datasets/S2_evi_5d/"
-    OUTPUT_DIR = "datasets/S2_evi_5d.zarr"
-    SCRATCH_DIR = Path("/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject")
+    INPUT_DIR = "datasets/S2_evi_5d_update/"
+    OUTPUT_DIR = "datasets/S2_evi_5d_update.zarr"
+    SCRATCH_DIR = Path(
+        "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets"
+    )
 
     WEATHER_VARS = [
         # "t2m_mean",
@@ -106,19 +108,19 @@ def main():
     dataset = dataset.chunk({"sample": 1000, "time_weather": -1, "time_veg": -1})
 
     print("\n=== Saving datasets and copying to tscratch ===")
-    scratch_path = SCRATCH_DIR / OUTPUT_DIR
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    scratch_path = SCRATCH_DIR
+    dataset_path = Path(OUTPUT_DIR)
+    os.makedirs(dataset_path, exist_ok=True)
     os.makedirs(scratch_path, exist_ok=True)
 
     if dataset is not None:
-        dataset_path = Path(OUTPUT_DIR)
         dataset.to_zarr(dataset_path, mode="w", consolidated=True)
         subprocess.run(
             [
                 "rsync",
                 "-a",
                 str(dataset_path),
-                str(os.path.join(SCRATCH_DIR, OUTPUT_DIR)),
+                str(scratch_path),
             ],
             check=True,
         )

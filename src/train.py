@@ -97,7 +97,7 @@ class BaseExperiment:
             log_every_n_steps=32,
             gradient_clip_val=self.config.get("gradient_clip_val", 1.0),
             deterministic=True,
-            profiler=None,  # "simple",
+            # profiler="simple",
             enable_progress_bar=True,
         )
 
@@ -261,24 +261,19 @@ def run_experiment(config, data_config, profile_resources=False):
     experiment.run(profile_resources=profile_resources)
 
 
-def get_folds(mode, data_config, predefined_folds=None):
-    if mode == "single" or mode == "tune":
-        return [(data_config["train"], data_config["test"])]
-
-    elif mode == "kfold":
-        if predefined_folds is None:
-            raise ValueError("K-fold mode requires predefined folds")
-        return predefined_folds
-
+def get_folds(data_config, task, kfolds=True):
+    split = data_config[task]
+    if kfolds:
+        return [(train, test, test) for train, test in data_config["kfolds"]]
     else:
-        raise ValueError(f"Unknown mode: {mode}")
+        return [(split["train"], split.get("validation", split["test"]), split["test"])]
 
 
 def run_pipeline(
     train_config_file="models/mlp.yaml",
     data_config_file="data_config.yaml",
-    mode="single",  # "tune", "single", "kfold"
-    folds=None,
+    kfolds=False,
+    name_experiment="",
     profile_resources=False,
 ):
     """
@@ -355,29 +350,28 @@ def run_pipeline(
         / data_config["vegetation"]["sensor"]
         / train_config["model_name"]
     )
+    base_output_dir = base_output_dir / name_experiment
     time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    fold_list = get_folds(mode, data_config, folds)
+    # fold_list = get_folds(data_config, train_config["task"], kfolds=kfolds)
 
-    for train_years, test_years in fold_list:
-        folder = f"{time}/{test_years[-1]}" if mode == "kfold" else f"{mode}"
-        train_config["output_dir"] = base_output_dir / folder
+    # for train_years, val_years, test_years in fold_list:
+    folder = f"{time}/"  # {test_years[-1]}" if kfolds else f"{time}/"
+    train_config["output_dir"] = base_output_dir / folder
+    fold_config = deepcopy(train_config)
 
-        fold_config = deepcopy(train_config)
-
-        data_config["train"] = train_years
-        data_config["validation"] = test_years
-        data_config["test"] = test_years
-
-        with wandb_run(
-            fold_config,
-            group=fold_config["model_name"],
-        ) as config:
-            run_experiment(
-                config,
-                data_config,
-                profile_resources=profile_resources,
-            )
+    # data_config["forecasting"]["train"] = train_years
+    # data_config["forecasting"]["validation"] = val_years
+    # data_config["forecasting"]["test"] = test_years
+    with wandb_run(
+        fold_config,
+        group=fold_config["model_name"],
+    ) as config:
+        run_experiment(
+            config,
+            data_config,
+            profile_resources=profile_resources,
+        )
 
     print("All experiments completed.")
 
@@ -387,13 +381,18 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/lstm.yaml",
+        default="defaults/transformer_baseline.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config_VIIRS.yaml",
+        default="data_config_Sentinel-2.yaml",
         help="Path to data config file (relative to project/configs/)",
+    )
+    parser.add_argument(
+        "--kfolds",
+        default=True,
+        help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
     )
     parser.add_argument(
         "--mode",
@@ -401,6 +400,13 @@ if __name__ == "__main__":
         default="kfold",
         help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
     )
+
+    parser.add_argument(
+        "--name_experiment",
+        default="",
+        help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
+    )
+
     parser.add_argument(
         "--profile_resources",
         action="store_true",
@@ -409,24 +415,18 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.mode == "kfold" and "sweep" in args.train_config_file.lower():
+    if args.kfolds and "sweep" in args.train_config_file.lower():
         print(
             f"\nERROR: Attempting k-fold evaluation with a sweep config '{args.train_config_file}'!\n Use a fixed hyperparameter config instead to ensure all folds use the same parameters.\n"
         )
         sys.exit(1)
 
-    folds = [
-        ([2017, 2018], [2018, 2019]),
-        ([2017, 2018, 2019], [2019, 2020]),
-        ([2017, 2018, 2019, 2020], [2020, 2021]),
-        ([2017, 2018, 2019, 2020, 2021], [2021, 2022]),
-    ]
     print(f"args are: {args}")
 
     run_pipeline(
         train_config_file=args.train_config_file,
         data_config_file=args.data_config_file,
-        mode=args.mode,
-        folds=folds if args.mode == "kfold" else None,
+        kfolds=args.kfolds,
+        name_experiment=args.name_experiment,
         profile_resources=args.profile_resources,
     )

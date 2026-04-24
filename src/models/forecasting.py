@@ -76,7 +76,7 @@ class MLP(nn.Module):
             + 2 * self.weather_seq_len * self.weather_dim
         )
         output_dim = self.veg_seq_len * self.veg_dim
-
+        # print(input_dim, output_dim)
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -84,19 +84,31 @@ class MLP(nn.Module):
         )
 
     def forward(self, batch):
-        veg = batch["vegetation_history"]  # [B, T_veg, C_veg]
+        veg_hist = batch["vegetation_history"]  # [B, T_veg, C_veg]
         weather = batch["weather_history"]  # [B, T_w, C_w]
         forecast = batch["weather_forecast"]  # [B, T_w, C_w]
 
+        smoothed = F.avg_pool1d(
+            torch.nan_to_num(veg_hist, nan=0.0).transpose(1, 2),
+            kernel_size=5,
+            stride=1,
+            padding=5 // 2,
+        ).transpose(1, 2)
+
+        # Only replace NaNs, keep original values intact
+        veg_hist = torch.where(torch.isnan(veg_hist), smoothed, veg_hist)
+
         # Replace NaNs with zero
-        veg = torch.nan_to_num(veg, nan=0.0)
+        veg = torch.nan_to_num(veg_hist, nan=0.0)
         weather = torch.nan_to_num(weather, nan=0.0)
         forecast = torch.nan_to_num(forecast, nan=0.0)
+        # print(veg.shape, weather.shape, forecast.shape)
 
         x = torch.cat(
             [veg.flatten(1), weather.flatten(1), forecast.flatten(1)],
             dim=-1,
         )
+        # print(x.shape)
         out = self.mlp(x)
         if out.ndim == 2:  # [B, T]
             out = out.unsqueeze(-1)
