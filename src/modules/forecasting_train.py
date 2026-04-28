@@ -141,6 +141,7 @@ class ForecastingTrainModule(LightningModule):
                     if "location" in batch
                     else None
                 ),
+                # "time": batch["time"].detach().cpu() if "time" in batch else None,
             }
         )
         return loss
@@ -168,7 +169,9 @@ class ForecastingTrainModule(LightningModule):
             ds_kwargs["coords"] = {
                 "longitude": ("sample", locations[:, 0].cpu().numpy()),
                 "latitude": ("sample", locations[:, 1].cpu().numpy()),
+                # "time":
             }
+            # time_array = self.test_outputs[0]["time"].cpu().numpy().astype("datetime64[s]")
 
         ds = xr.Dataset(**ds_kwargs)
         # Zarr path

@@ -3,6 +3,7 @@ import torch.nn as nn
 from .encoders import TimeSeriesTransformerEncoder
 from .positional_encoding import ClassicPositionalEncoding
 import torch.nn.functional as F
+import copy
 
 
 def _cfg_get(config, key, default):
@@ -140,12 +141,11 @@ class LSTM(nn.Module):
 
     def teacher_forcing_ratio(self, step=None, total_steps=None):
         # Compute teacher forcing probability using a sigmoid schedule
-        if step is not None and total_steps is not None:
-            print("YEEH")
-            # Start mostly teacher forcing, decay over time
-            return 1 / (1 + torch.exp(5 * (step / total_steps - 0.5)))  # sigmoid
-        else:
-            return 0.5
+        # if step is not None and total_steps is not None:
+        #     # Start mostly teacher forcing, decay over time
+        #     return 1 / (1 + torch.exp(5 * (step / total_steps - 0.5)))  # sigmoid
+        # else:
+        return 0.5
 
     def forward(self, batch, step=None, total_steps=None):
         """
@@ -167,6 +167,7 @@ class LSTM(nn.Module):
 
         # Only replace NaNs, keep original values intact
         veg_hist = torch.where(torch.isnan(veg_hist), smoothed, veg_hist)
+        veg_hist = torch.where(torch.isnan(veg_hist), 0, veg_hist)
 
         if self.training:
             veg_forecast = batch["vegetation_forecast"]
@@ -184,7 +185,8 @@ class LSTM(nn.Module):
             weather_step = weather_forecast[:, t, :]
             lstm_input = torch.cat([input_veg, weather_step], dim=-1).unsqueeze(1)
             out, (h, c) = self.lstm(lstm_input, (h, c))
-            pred_step = self.head(out.squeeze(1))
+            # Predict only the difference from previous step
+            pred_step = input_veg + self.head(out.squeeze(1))
             preds.append(pred_step.unsqueeze(1))
 
             # Decide teacher forcing per batch element
@@ -217,6 +219,7 @@ class TransformerBaseline(nn.Module):
             print("Using pretrained encoders for forecasting...")
             self.veg_encoder = pretrained_encoders["veg"]
             self.weather_encoder = pretrained_encoders["weather"]
+            self.weather_query_encoder = copy.deepcopy(pretrained_encoders["weather"])
             print("Loaded pretrained encoders for forecasting.")
 
         else:
@@ -243,6 +246,16 @@ class TransformerBaseline(nn.Module):
                 use_cls=config.use_cls,
                 seasonal_positional_encoding=config.seasonal_positional_encoding,
             )
+            # self.weather_query_encoder = TimeSeriesTransformerEncoder(
+            #     input_dim=weather_dim,
+            #     sequence_length=T_weather,
+            #     d_model=d_model,
+            #     num_heads=config.num_heads,
+            #     num_layers=config.num_layers,
+            #     dropout=config.dropout,
+            #     use_cls=config.use_cls,
+            #     seasonal_positional_encoding=config.seasonal_positional_encoding,
+            # )
 
         # --- Decoder: weather_forecast attends to past context ---
         decoder_layer = nn.TransformerDecoderLayer(
@@ -273,7 +286,6 @@ class TransformerBaseline(nn.Module):
         forecast_query, _ = self.weather_encoder(
             batch["weather_forecast"]
         )  # [B, T_w, d]
-        # print(memory.shape, forecast_query.shape)
         out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
 
         # Project to vegetation space

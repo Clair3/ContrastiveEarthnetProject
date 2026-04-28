@@ -71,10 +71,19 @@ class BaseDataset(Dataset):
             for year in pd.unique(weather_years)
         }
 
+    def deseasonalize(self, data, msc):
+        aligned_msc = msc.sel(dayofyear=data["time_veg.dayofyear"])
+        deseasonalized = data - aligned_msc
+        deseasonalized = deseasonalized.reset_coords("dayofyear", drop=True)
+        return deseasonalized
+
     def _load_year_tensor(self, sample, year):
         veg_idx = self.veg_year_masks[year]
         weather_idx = self.weather_year_masks[year]
-
+        # msc = sample["msc"]
+        # if "msc" in sample:
+        #
+        # else:
         veg_arr = torch.as_tensor(
             np.stack(
                 [sample[var].values[veg_idx] for var in self.sentinel2_vars], axis=1
@@ -249,7 +258,6 @@ class ForecastingValDataset(BaseDataset):
             self._validate_tensors(
                 veg_hist, weather_hist, veg_forecast, weather_forecast
             )
-
             return {
                 "vegetation_history": veg_hist,
                 "weather_history": weather_hist,
@@ -257,7 +265,11 @@ class ForecastingValDataset(BaseDataset):
                 "weather_forecast": weather_forecast,
                 "percentiles_forecast": percentiles_forecast,
                 "location": self.locations[sample_id],
-                "year": year,
+                "time": torch.tensor(
+                    self.dataset.time_veg.values[self.veg_year_masks[year]]
+                    .astype("datetime64[s]")
+                    .astype(np.int64)
+                ),
             }
         except Exception as e:
             # logging.warning(f"Skipping {(sample_id, year)}: {e}")

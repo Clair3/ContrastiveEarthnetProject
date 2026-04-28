@@ -17,15 +17,15 @@ class TimeSeriesTransformerEncoder(nn.Module):
         dropout,
     ):
         super().__init__()
-        print(
-            input_dim,
-            sequence_length,
-            use_cls,
-            seasonal_positional_encoding,
-            d_model,
-            num_heads,
-            num_layers,
-        )
+        # print(
+        #     input_dim,
+        #     sequence_length,
+        #     use_cls,
+        #     seasonal_positional_encoding,
+        #     d_model,
+        #     num_heads,
+        #     num_layers,
+        # )
         self.use_cls = use_cls
         self.linear_layer = nn.Linear(input_dim, d_model)
 
@@ -99,11 +99,13 @@ class ContrastiveHead(nn.Module):
         # x: (B, T, D)
 
         mask = ~padding_mask
+        print(mask.shape, x.shape)
         mask = mask.unsqueeze(-1)
 
         pooled = (x * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-6)
-
+        print(pooled.shape)
         z = self.proj(pooled)
+        print(z.shape)
         z = nn.functional.normalize(z, dim=-1)
         return z
 

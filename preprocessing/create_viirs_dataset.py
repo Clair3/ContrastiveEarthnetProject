@@ -252,6 +252,18 @@ def main():
 
     ds = ds.sel(time=slice("2012-01-01T12:00:00", "2025-12-31T12:00:00"))
     ds = ds.sel(time=~((ds["time"].dt.month == 2) & (ds["time"].dt.day == 29)))
+
+    # ds["evi"] = ds.evi.groupby("time.year").map(
+        # lambda x: x.resample(time="5D", origin="start").mean()
+    # )
+# 
+    # # MSC (Jan 1 anchored bins)
+    # ds["msc"] = (
+        # ds.msc.groupby_bins("dayofyear", bins=np.arange(1, 367, 5), right=False)
+        # .mean()
+        # .rename({"dayofyear_bins": "dayofyear_5d"})
+    # )
+
     ds = ds.rename({"locations": "sample"})
     ds = ds.rename({"lat": "latitude"})
     ds = ds.rename({"lon": "longitude"})

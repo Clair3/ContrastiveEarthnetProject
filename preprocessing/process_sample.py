@@ -73,16 +73,6 @@ class ProcessTrainDataset:
         ds = xr.open_zarr(sample_path)
         vegetation = self._process_vegetation(ds).rename({"time": "time_veg"})
         weather = ds[self.era5_variables].rename({"time": "time_weather"})
-        # vegetation["evi"] = self.reindex_all_years(
-        #     vegetation["evi"],
-        #     temporal_resolution=self.temporal_resolution_veg,
-        #     time_var="time_veg",
-        # )
-        # weather = self.reindex_all_years(
-        #     weather,
-        #     temporal_resolution=self.temporal_resolution_weather,
-        #     time_var="time_weather",
-        # )
 
         lat, lon = vegetation.location.item()
         out = xr.Dataset(
@@ -133,59 +123,6 @@ class ProcessTrainDataset:
         if veg_index is None:
             raise ValueError("Vegetation index computation failed")
         return veg_index
-
-    def reindex_all_years(self, data, temporal_resolution=16, time_var="time"):
-        # Get all unique years
-        years = np.unique(data[time_var].dt.year.values)
-
-        reindexed_years = []
-        for y in years:
-            reindexed_year = select_year(
-                data,
-                selected_year=int(y),
-                temporal_resolution=temporal_resolution,
-                time_var=time_var,
-            )
-            if reindexed_year is not None:
-                reindexed_years.append(reindexed_year)
-
-        # Concatenate all years along the time dimension
-        data_all_years = xr.concat(reindexed_years, dim=time_var)
-        return data_all_years
-
-
-@staticmethod
-def select_year(
-    data: xr.DataArray | xr.Dataset,
-    selected_year: int,
-    temporal_resolution: int = 16,
-    time_var: str = "time",
-):
-    """
-    Reindex/pad time to canonical non-leap-year bins at the given temporal resolution.
-    Returns the same xarray object but limited to selected_year with gaps filled as NaN.
-    """
-
-    # canonical times on a non-leap year (2019 used as canonical)
-    canonical_times = pd.date_range(
-        "2019-01-01", "2019-12-31", freq=f"{int(temporal_resolution)}D"
-    )
-    expected_times = canonical_times.map(lambda t: t.replace(year=int(selected_year)))
-
-    # select data for the chosen year
-    data_year = data.sel({time_var: data[time_var].dt.year == int(selected_year)})
-
-    # reindex onto canonical expected times
-    tol = np.timedelta64(max(1, temporal_resolution // 2), "D")
-
-    data_year = data_year.reindex(
-        {time_var: pd.to_datetime(expected_times)},
-        method="nearest",
-        tolerance=tol,
-    )
-    if data_year[time_var].isnull().any():
-        return None  # year could not be properly reindexed
-    return data_year
 
 
 def load_paths_from_dir(input_dir: str | Path) -> List[str]:
