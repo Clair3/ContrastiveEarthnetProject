@@ -175,24 +175,10 @@ class ContrastiveExperiment(BaseExperiment):
 
         self.encoder_veg = encoder_veg
         self.encoder_weather = encoder_weather
-        veg_contr_head = ContrastiveHead(
-            d_model=self.config.d_model,
-            projection_dim=1,
-        )
-        weather_contr_head = ContrastiveHead(
-            d_model=self.config.d_model,
-            projection_dim=1,
-        )
 
-        vegetation_model = ContrastiveTransformer(
-            encoder_veg,
-            veg_contr_head,
-        )
+        vegetation_model = ContrastiveTransformer(encoder_veg)
 
-        weather_model = ContrastiveTransformer(
-            encoder_weather,
-            weather_contr_head,
-        )
+        weather_model = ContrastiveTransformer(encoder_weather)
 
         return ContrastiveTrainingModule(
             encoder_veg=vegetation_model,
@@ -388,7 +374,7 @@ def run_pipeline(
     # fold_list = get_folds(data_config, train_config["task"], kfolds=kfolds)
 
     # for train_years, val_years, test_years in fold_list:
-    folder = Path(str({time})) / str({data_config["forecasting"]["test"][1]})
+    folder = Path(str(time)) / str(data_config["forecasting"]["test"][1])
 
     train_config["output_dir"] = base_output_dir / folder
     fold_config = deepcopy(train_config)
@@ -414,7 +400,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/lstm.yaml",  # _pretrain_forecast.yaml",
+        default="defaults/transformer_baseline.yaml",  # _pretrain_forecast.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
@@ -436,7 +422,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--name_experiment",
-        default="l1",
+        default="modality_flag",
         help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
     )
 

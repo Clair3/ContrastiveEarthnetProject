@@ -80,10 +80,6 @@ class BaseDataset(Dataset):
     def _load_year_tensor(self, sample, year):
         veg_idx = self.veg_year_masks[year]
         weather_idx = self.weather_year_masks[year]
-        # msc = sample["msc"]
-        # if "msc" in sample:
-        #
-        # else:
         veg_arr = torch.as_tensor(
             np.stack(
                 [sample[var].values[veg_idx] for var in self.sentinel2_vars], axis=1
@@ -97,7 +93,13 @@ class BaseDataset(Dataset):
             dtype=torch.float32,
         )
 
-        return veg_arr, weather_arr
+        msc = sample["msc"]
+        msc_arr = torch.as_tensor(
+            np.stack([msc], axis=1),
+            dtype=torch.float32,
+        )
+
+        return veg_arr, weather_arr, msc_arr
 
     def _preload_sample(self, sample_id, years):
         """Precompute tensors for all years of a given sample."""
@@ -162,8 +164,8 @@ class ForecastingTrainDataset(BaseDataset):
         try:
             sample = self.samples[sample_id]
 
-            veg_hist, weather_hist = sample[year - 1]
-            veg_forecast, weather_forecast = sample[year]
+            veg_hist, weather_hist, msc = sample[year - 1]
+            veg_forecast, weather_forecast, _ = sample[year]
 
             self._validate_tensors(
                 veg_hist, weather_hist, veg_forecast, weather_forecast
@@ -250,8 +252,8 @@ class ForecastingValDataset(BaseDataset):
         try:
             sample = self.samples[sample_id]
 
-            veg_hist, weather_hist = sample[year - 1]
-            veg_forecast, weather_forecast = sample[year]
+            veg_hist, weather_hist, msc = sample[year - 1]
+            veg_forecast, weather_forecast, _ = sample[year]
 
             percentiles_forecast = self.extremes[sample_id][year]
 

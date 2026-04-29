@@ -89,11 +89,6 @@ class TimeSeriesTransformerEncoder(nn.Module):
 class ContrastiveHead(nn.Module):
     def __init__(self, d_model, projection_dim):
         super().__init__()
-        self.proj = nn.Sequential(
-            nn.Linear(d_model, d_model),
-            nn.ReLU(),
-            nn.Linear(d_model, projection_dim),
-        )
 
     def forward(self, x, padding_mask):
         # x: (B, T, D)
@@ -111,13 +106,30 @@ class ContrastiveHead(nn.Module):
 
 
 class ContrastiveTransformer(nn.Module):
-    def __init__(self, encoder, head):
+    def __init__(self, config, encoder):
         super().__init__()
         self.encoder = encoder
-        self.head = head
+        d_model = config.d_model
+        projection_dim = (
+            config.projection_dim if config.projection_dim else 1
+        )  # Project to 1D for contrastive loss
+        self.proj = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.ReLU(),
+            nn.Linear(d_model, projection_dim),
+        )
 
     def forward(self, x):
-        seq, mask = self.encoder(x)
+        seq, padding_mask = self.encoder(x)
+        mask = ~padding_mask
+
+        mask = mask.unsqueeze(-1)
+
+        pooled = (x * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-6)
+        print(pooled.shape)
+        z = self.proj(pooled)
+        print(z.shape)
+        z = nn.functional.normalize(z, dim=-1)
         z = self.head(seq, mask)
         return seq[:, 0, :]
 
