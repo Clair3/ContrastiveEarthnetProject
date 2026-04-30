@@ -4,6 +4,7 @@ import torch
 import logging
 import pandas as pd
 from torch.utils.data import Dataset
+import copy
 
 
 class BaseDataset(Dataset):
@@ -96,6 +97,9 @@ class BaseDataset(Dataset):
         return veg_arr, weather_arr
 
     def _compute_max_evi(self, veg_arr):
+        nan_mask = torch.isnan(veg_arr)
+        veg_arr = copy.deepcopy(veg_arr)
+        veg_arr = torch.where(nan_mask, torch.tensor(float("-inf")), veg_arr)
         return torch.max(veg_arr)
 
     def _compute_sum_precip(self, weather_arr):
@@ -279,6 +283,8 @@ class ForecastingValDataset(BaseDataset):
             veg_forecast, weather_forecast = sample[year]
 
             # msc = self._get_msc(sample)
+            max_evi = self._compute_max_evi(veg_forecast)
+            sum_precip = self._compute_sum_precip(weather_forecast)
 
             percentiles_forecast = self.extremes[sample_id][year]
 
@@ -291,6 +297,8 @@ class ForecastingValDataset(BaseDataset):
                 "vegetation_forecast": veg_forecast,
                 "weather_forecast": weather_forecast,
                 "percentiles_forecast": percentiles_forecast,
+                "max_evi": max_evi,
+                "sum_precip": sum_precip,
                 "location": self.locations[sample_id],
                 "time": torch.tensor(
                     self.dataset.time_veg.values[self.veg_year_masks[year]]

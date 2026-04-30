@@ -1,2 +1,3 @@
-from .contrastive_train import ContrastiveTrainingModule
-from .forecasting_train import ForecastingTrainModule
+from .contrastive import ContrastiveModule
+from .forecasting import ForecastingModule
+from .probing import ProbingModule

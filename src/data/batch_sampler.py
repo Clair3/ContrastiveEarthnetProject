@@ -16,7 +16,6 @@ class BatchSampler(Sampler):
         self.shuffle = shuffle
         self.batch_to_indices = self.batch_years(loc_year_pairs=dataset.training_pairs)
         print(f"Built BatchSampler with {len(self.batch_to_indices)} batches.")
-        print(self.batch_to_indices)
         self.batch_ids = list(self.batch_to_indices.keys())
 
     def __iter__(self):

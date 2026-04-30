@@ -245,8 +245,8 @@ class TransformerBaseline(nn.Module):
 
     def forward(self, batch):
         # Encode past: veg and weather history → sequence of tokens
-        veg_mem, _ = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
-        weather_mem, _ = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
+        veg_mem = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
+        weather_mem = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
         veg_mem = veg_mem + self.veg_token
         weather_mem = weather_mem + self.weather_token
 
@@ -254,9 +254,7 @@ class TransformerBaseline(nn.Module):
         memory = torch.cat([veg_mem, weather_mem], dim=1)  # [B, T_veg+T_w, d]
 
         # Decode: weather forecast queries into past memory
-        forecast_query, _ = self.weather_encoder(
-            batch["weather_forecast"]
-        )  # [B, T_w, d]
+        forecast_query = self.weather_encoder(batch["weather_forecast"])  # [B, T_w, d]
         out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
 
         # Project to vegetation space
@@ -325,16 +323,14 @@ class TransformerMaxEVI(nn.Module):
 
     def forward(self, batch):
         # Encode past: veg and weather history → sequence of tokens
-        veg_mem, _ = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
-        weather_mem, _ = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
+        veg_mem = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
+        weather_mem = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
 
         # Past memory = concat along sequence dim (not feature dim)
         memory = torch.cat([veg_mem, weather_mem], dim=1)  # [B, T_veg+T_w, d]
 
         # Decode: weather forecast queries into past memory
-        forecast_query, _ = self.weather_encoder(
-            batch["weather_forecast"]
-        )  # [B, T_w, d]
+        forecast_query = self.weather_encoder(batch["weather_forecast"])  # [B, T_w, d]
         out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
 
         # Project to vegetation space

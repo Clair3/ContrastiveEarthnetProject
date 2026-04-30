@@ -24,11 +24,10 @@ from pytorch_lightning.callbacks import (
 import torch.nn as nn
 
 from data import ContrastiveDataModule, ForecastingDataModule
-from modules import ContrastiveTrainingModule, ForecastingTrainModule
+from modules import ContrastiveModule, ForecastingModule, ProbingModule
 from models import (
     TimeSeriesTransformerEncoder,
-    ContrastiveHead,
-    ContrastiveTransformer,
+    CLSHead,
     ModelClass,
 )
 
@@ -89,9 +88,7 @@ class BaseExperiment:
             self.estimate_batch_resources(model, datamodule)
             return  # skip full training
 
-        self.logger = WandbLogger(
-            project="contrastive-earthnet", config=self.config, log_model="best"
-        )
+        self.logger = WandbLogger(project="contrastive-earthnet", log_model="best")
 
         trainer = Trainer(
             max_epochs=self.config.max_epochs,
@@ -176,16 +173,17 @@ class ContrastiveExperiment(BaseExperiment):
         self.encoder_veg = encoder_veg
         self.encoder_weather = encoder_weather
 
-        vegetation_model = ContrastiveTransformer(encoder_veg)
+        vegetation_model = CLSHead(encoder_veg)
+        weather_model = CLSHead(encoder_weather)
 
-        weather_model = ContrastiveTransformer(encoder_weather)
+        print(self.config)
 
-        return ContrastiveTrainingModule(
+        contrastive_module = ContrastiveModule(
             encoder_veg=vegetation_model,
             encoder_weather=weather_model,
-            lr=float(self.config.lr),
-            temperature=self.config.temperature,
+            cfg=dict(self.config),
         )
+        return contrastive_module
 
 
 class ForecastingExperiment(BaseExperiment):
@@ -211,11 +209,11 @@ class ForecastingExperiment(BaseExperiment):
                 data_config=self.data_config,
                 config=self.config,
             )
-
-        return ForecastingTrainModule(
+        forecasting_module = ForecastingModule(
             model=self.model,
-            config=self.config,
+            config=dict(self.config),
         )
+        return forecasting_module
 
 
 class PretrainThenForecastExperiment(BaseExperiment):
@@ -227,14 +225,7 @@ class PretrainThenForecastExperiment(BaseExperiment):
     def __init__(self, config, data_config):
         super().__init__(config, data_config)
 
-        # config_contrastive = deepcopy(config)
-        # config_contrastive.use_cls = (
-        #     True  # ensure CLS token is used for pretrained encoders
-        # )
         self.contrastive_experiment = ContrastiveExperiment(config, data_config)
-
-        # config_forecasting = deepcopy(config)
-        # config_forecasting.use_cls = False
         self.forecasting_experiment = ForecastingExperiment(config, data_config)
 
     def run(self, profile_resources=False):
@@ -400,7 +391,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/transformer_baseline.yaml",  # _pretrain_forecast.yaml",
+        default="defaults/transformer_contrastive.yaml",  # _pretrain_forecast.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(

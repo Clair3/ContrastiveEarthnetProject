@@ -3,7 +3,6 @@ import os
 
 import numpy as np
 import xarray as xr
-from torch import optim
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 
 import torch.nn.functional as F
@@ -11,7 +10,7 @@ import torch.nn as nn
 from pytorch_lightning import LightningModule
 
 
-class ForecastingTrainModule(LightningModule):
+class ForecastingModule(LightningModule):
     """
     LightningModule for vegetation forecasting.
     """

@@ -64,29 +64,5 @@ class TimeSeriesTransformerEncoder(nn.Module):
             cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=x.device)
             padding_mask = torch.cat([cls_mask, padding_mask], dim=1)
 
-        return (
-            self.transformer(x, src_key_padding_mask=padding_mask),
-            padding_mask,
-        )
+        return self.transformer(x, src_key_padding_mask=padding_mask)
 
-
-class CLSHead(nn.Module):
-    def __init__(self, d_model, out_dim=1):
-        super().__init__()
-
-    def forward(self, seq):
-        return seq[:, 0, :]
-
-
-class RegressionHead(nn.Module):
-    def __init__(self, d_model, out_dim=1):
-        super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_model),
-            nn.ReLU(),
-            nn.Linear(d_model, out_dim),
-        )
-
-    def forward(self, seq):
-        cls = seq[:, 0, :]
-        return self.mlp(cls)

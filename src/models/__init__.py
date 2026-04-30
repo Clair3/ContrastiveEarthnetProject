@@ -1,24 +1,19 @@
-from .encoders import (
-    TimeSeriesTransformerEncoder,
-    ContrastiveTransformer,
-    ContrastiveHead,
-)
+from .encoders import TimeSeriesTransformerEncoder
 
 from .forecasting import (
     LSTM,
-    PersistenceBaseline,
-    SeasonalBaseline,
     TransformerBaseline,
     LinearRegressionBaseline,
     MLP,
 )
 
+from .probing import RegressionHead, CLSHead
+
 ModelClass = {
     "LSTM": LSTM,
-    "PersistenceBaseline": PersistenceBaseline,
-    "SeasonalBaseline": SeasonalBaseline,
     "TransformerBaseline": TransformerBaseline,
     "LinearRegressionBaseline": LinearRegressionBaseline,
     "MLP": MLP,
-    # "TransformerContrastive": ContrastiveTransformer,
+    "RegressionHead": RegressionHead,
+    "CLSHead": CLSHead,
 }

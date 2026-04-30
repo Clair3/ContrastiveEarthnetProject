@@ -49,12 +49,12 @@ class ContrastiveDataModule(LightningDataModule):
     def _build_dataloader(self, dataset, shuffle=False):
         return DataLoader(
             dataset,
-            batch_size=self.batch_size,
-            # batch_sampler=BatchSampler(
-            #     dataset=self.train_dataset,
-            #     shuffle=True,
-            # ),
-            shuffle=shuffle,
+            # batch_size=self.batch_size,
+            batch_sampler=BatchSampler(
+                dataset=dataset,
+                shuffle=True,
+            ),
+            # shuffle=shuffle,
             num_workers=self.num_workers,
             collate_fn=safe_collate,
             pin_memory=True,
