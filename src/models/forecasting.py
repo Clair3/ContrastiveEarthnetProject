@@ -6,30 +6,6 @@ import torch.nn.functional as F
 import copy
 
 
-def _cfg_get(config, key, default):
-    if hasattr(config, key):
-        return getattr(config, key)
-    if isinstance(config, dict):
-        return config.get(key, default)
-    return default
-
-
-class PersistenceBaseline(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, batch):
-        return batch["vegetation_history"]
-
-
-class SeasonalBaseline(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, batch):
-        return batch["mean_seasonal_cycle"]
-
-
 class LinearRegressionBaseline(nn.Module):
     def __init__(self, data_config, config=None):
 
@@ -345,6 +321,7 @@ class TransformerMaxEVI(nn.Module):
 
         # --- Head ---
         self.head = nn.Linear(d_model, veg_dim)
+        self.pool = nn.Linear(d_model, 1)
 
     def forward(self, batch):
         # Encode past: veg and weather history → sequence of tokens
@@ -362,4 +339,8 @@ class TransformerMaxEVI(nn.Module):
 
         # Project to vegetation space
         out = self.head(out)  # [B, T_w, veg_dim]
-        return out[:, 0, :]  # return max EVI prediction for the forecast period
+        weights = torch.softmax(self.pool(out), dim=1)  # [B, T, 1]
+        pooled = (out * weights).sum(dim=1)
+        return pooled
+
+        # return out[:, 0, :]  # predict max EVI prediction for the forecast period

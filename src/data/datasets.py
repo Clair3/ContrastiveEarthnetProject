@@ -93,13 +93,30 @@ class BaseDataset(Dataset):
             dtype=torch.float32,
         )
 
+        return veg_arr, weather_arr
+
+    def _compute_max_evi(self, veg_arr):
+        return torch.max(veg_arr)
+
+    def _compute_sum_precip(self, weather_arr):
+        # precipitation is either "tp_max" or "P"
+        if "tp_max" in self.era5_vars:
+            precip_idx = self.era5_vars.index("tp_max")
+        elif "P" in self.era5_vars:
+            precip_idx = self.era5_vars.index("P")
+        else:
+            raise ValueError(
+                "No precipitation variable found in era5_vars. Must include either 'tp_max' or 'P'."
+            )
+        return torch.sum(weather_arr[:, precip_idx])
+
+    def _get_msc(self, sample):
         msc = sample["msc"]
         msc_arr = torch.as_tensor(
             np.stack([msc], axis=1),
             dtype=torch.float32,
         )
-
-        return veg_arr, weather_arr, msc_arr
+        return msc_arr
 
     def _preload_sample(self, sample_id, years):
         """Precompute tensors for all years of a given sample."""
@@ -131,10 +148,16 @@ class ContrastiveDataset(BaseDataset):
         sample_id, year = self.training_pairs[idx]
         try:
             vegetation, weather = self.samples[sample_id][year]
+            self._validate_tensors(vegetation, weather)
+
+            max_evi = self._compute_max_evi(vegetation)
+            sum_precip = self._compute_sum_precip(weather)
 
             data = {
                 "vegetation": vegetation,
                 "weather": weather,
+                "max_evi": max_evi,
+                "sum_precip": sum_precip,
                 "location": self.locations[sample_id],
             }
             return data
@@ -164,8 +187,8 @@ class ForecastingTrainDataset(BaseDataset):
         try:
             sample = self.samples[sample_id]
 
-            veg_hist, weather_hist, msc = sample[year - 1]
-            veg_forecast, weather_forecast, _ = sample[year]
+            veg_hist, weather_hist = sample[year - 1]
+            veg_forecast, weather_forecast = sample[year]
 
             self._validate_tensors(
                 veg_hist, weather_hist, veg_forecast, weather_forecast
@@ -252,8 +275,10 @@ class ForecastingValDataset(BaseDataset):
         try:
             sample = self.samples[sample_id]
 
-            veg_hist, weather_hist, msc = sample[year - 1]
-            veg_forecast, weather_forecast, _ = sample[year]
+            veg_hist, weather_hist = sample[year - 1]
+            veg_forecast, weather_forecast = sample[year]
+
+            # msc = self._get_msc(sample)
 
             percentiles_forecast = self.extremes[sample_id][year]
 
