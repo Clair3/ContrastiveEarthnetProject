@@ -24,7 +24,7 @@ from pytorch_lightning.callbacks import (
 import torch.nn as nn
 
 from data import ContrastiveDataModule, ForecastingDataModule
-from modules import ContrastiveModule, ForecastingModule, ProbingModule
+from modules import ContrastiveModule, ForecastingModule
 from models import (
     TimeSeriesTransformerEncoder,
     CLSHead,
@@ -100,6 +100,9 @@ class BaseExperiment:
             log_every_n_steps=32,
             gradient_clip_val=self.config.get("gradient_clip_val", 1.0),
             deterministic=True,
+            accumulate_grad_batches=(
+                30 if self.data_config["contrastive"].get("batch_sampler", False) else 1
+            ),
             # profiler="simple",
             enable_progress_bar=True,
         )
@@ -176,8 +179,6 @@ class ContrastiveExperiment(BaseExperiment):
         vegetation_model = CLSHead(encoder_veg)
         weather_model = CLSHead(encoder_weather)
 
-        print(self.config)
-
         contrastive_module = ContrastiveModule(
             encoder_veg=vegetation_model,
             encoder_weather=weather_model,
@@ -189,6 +190,7 @@ class ContrastiveExperiment(BaseExperiment):
 class ForecastingExperiment(BaseExperiment):
 
     def build_datamodule(self):
+        self.data_config["forecasting"]["memory_length"] = self.config["memory_length"]
         return ForecastingDataModule(
             data_config=self.data_config,
             batch_size=self.config.batch_size,
@@ -211,7 +213,7 @@ class ForecastingExperiment(BaseExperiment):
             )
         forecasting_module = ForecastingModule(
             model=self.model,
-            config=dict(self.config),
+            config=self.config,
         )
         return forecasting_module
 
@@ -365,7 +367,7 @@ def run_pipeline(
     # fold_list = get_folds(data_config, train_config["task"], kfolds=kfolds)
 
     # for train_years, val_years, test_years in fold_list:
-    folder = Path(str(time)) / str(data_config["forecasting"]["test"][1])
+    folder = Path(str(time)) / str(data_config["forecasting"]["test"][-1])
 
     train_config["output_dir"] = base_output_dir / folder
     fold_config = deepcopy(train_config)
@@ -391,12 +393,12 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/transformer_contrastive.yaml",  # _pretrain_forecast.yaml",
+        default="defaults/transformer_msc.yaml",  # _pretrain_forecast.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config_Sentinel-2.yaml",
+        default="data_config_Sentinel-2_2.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
     parser.add_argument(

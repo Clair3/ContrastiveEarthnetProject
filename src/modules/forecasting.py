@@ -38,6 +38,18 @@ class ForecastingModule(LightningModule):
             y_true[mask][extremes_mask],
         )
 
+    def _compute_anomalies_loss(self, y_pred, y_true, msc, mask):
+        percentiles = percentiles[mask]
+        extremes_mask = percentiles <= 0.1
+
+        if not extremes_mask.any():
+            return None
+
+        return self.loss_fn(
+            y_pred[mask][extremes_mask],
+            y_true[mask][extremes_mask],
+        )
+
     def training_step(self, batch, batch_idx):
         if batch is None:
             self.log(

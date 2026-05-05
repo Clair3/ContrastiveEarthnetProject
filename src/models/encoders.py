@@ -60,9 +60,7 @@ class TimeSeriesTransformerEncoder(nn.Module):
         if self.use_cls:
             cls = self.cls_token.expand(B, -1, -1)
             x = torch.cat([cls, x], dim=1)
-
             cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=x.device)
             padding_mask = torch.cat([cls_mask, padding_mask], dim=1)
 
         return self.transformer(x, src_key_padding_mask=padding_mask)
-

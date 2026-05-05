@@ -84,7 +84,6 @@ class MLP(nn.Module):
             [veg.flatten(1), weather.flatten(1), forecast.flatten(1)],
             dim=-1,
         )
-        # print(x.shape)
         out = self.mlp(x)
         if out.ndim == 2:  # [B, T]
             out = out.unsqueeze(-1)
@@ -189,6 +188,8 @@ class TransformerBaseline(nn.Module):
         weather_dim = len(data_config["weather"]["variables"])
         T_veg = data_config["vegetation"]["sequence_length"]
         T_weather = data_config["weather"]["sequence_length"]
+        memory_length = config.memory_length
+
         d_model = config.d_model
 
         if pretrained_encoders is not None:
@@ -204,7 +205,7 @@ class TransformerBaseline(nn.Module):
             )
             self.veg_encoder = TimeSeriesTransformerEncoder(
                 input_dim=veg_dim,
-                sequence_length=T_veg,
+                sequence_length=T_veg * memory_length,
                 d_model=d_model,
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,
@@ -212,7 +213,19 @@ class TransformerBaseline(nn.Module):
                 use_cls=config.use_cls,
                 seasonal_positional_encoding=config.seasonal_positional_encoding,
             )
+
             self.weather_encoder = TimeSeriesTransformerEncoder(
+                input_dim=weather_dim,
+                sequence_length=T_weather * memory_length,
+                d_model=d_model,
+                num_heads=config.num_heads,
+                num_layers=config.num_layers,
+                dropout=config.dropout,
+                use_cls=config.use_cls,
+                seasonal_positional_encoding=config.seasonal_positional_encoding,
+            )
+
+            self.weather_forecast_encoder = TimeSeriesTransformerEncoder(
                 input_dim=weather_dim,
                 sequence_length=T_weather,
                 d_model=d_model,
@@ -240,21 +253,96 @@ class TransformerBaseline(nn.Module):
         # --- Head ---
         self.head = nn.Linear(d_model, veg_dim)
 
-        self.veg_token = nn.Parameter(torch.randn(1, 1, d_model))
-        self.weather_token = nn.Parameter(torch.randn(1, 1, d_model))
-
     def forward(self, batch):
         # Encode past: veg and weather history → sequence of tokens
+
         veg_mem = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
         weather_mem = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
-        veg_mem = veg_mem + self.veg_token
-        weather_mem = weather_mem + self.weather_token
 
         # Past memory = concat along sequence dim (not feature dim)
         memory = torch.cat([veg_mem, weather_mem], dim=1)  # [B, T_veg+T_w, d]
 
         # Decode: weather forecast queries into past memory
-        forecast_query = self.weather_encoder(batch["weather_forecast"])  # [B, T_w, d]
+        forecast_query = self.weather_forecast_encoder(
+            batch["weather_forecast"]
+        )  # [B, T_w, d]
+        out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
+
+        # Project to vegetation space
+        out = self.head(out)  # [B, T_w, veg_dim]
+        return out
+
+
+class TransformerMSC(nn.Module):
+    def __init__(self, data_config, config, pretrained_encoders=None):
+        super().__init__()
+        veg_dim = len(data_config["vegetation"]["variables"])
+        weather_dim = len(data_config["weather"]["variables"])
+        T_veg = data_config["vegetation"]["sequence_length"]
+        T_weather = data_config["weather"]["sequence_length"]
+        memory_length = config.memory_length
+
+        d_model = config.d_model
+
+        if pretrained_encoders is not None:
+            print("Using pretrained encoders for forecasting...")
+            self.veg_encoder = pretrained_encoders["veg"]
+            self.weather_encoder = pretrained_encoders["weather"]
+            self.weather_query_encoder = copy.deepcopy(pretrained_encoders["weather"])
+            print("Loaded pretrained encoders for forecasting.")
+
+        else:
+            print(
+                f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
+            )
+            self.veg_encoder = TimeSeriesTransformerEncoder(
+                input_dim=veg_dim,
+                sequence_length=T_veg * memory_length,
+                d_model=d_model,
+                num_heads=config.num_heads,
+                num_layers=config.num_layers,
+                dropout=config.dropout,
+                use_cls=config.use_cls,
+                seasonal_positional_encoding=config.seasonal_positional_encoding,
+            )
+
+            self.weather_forecast_encoder = TimeSeriesTransformerEncoder(
+                input_dim=weather_dim,
+                sequence_length=T_weather,
+                d_model=d_model,
+                num_heads=config.num_heads,
+                num_layers=config.num_layers,
+                dropout=config.dropout,
+                use_cls=config.use_cls,
+                seasonal_positional_encoding=config.seasonal_positional_encoding,
+            )
+
+        # --- Decoder: weather_forecast attends to past context ---
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=config.num_heads,
+            dropout=config.dropout,
+            batch_first=True,
+            norm_first=True,  # pre-norm: more stable with small data
+        )
+        # causal_mask = self.generate_causal_mask(T, x.device)
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers=config.num_layers,
+        )
+
+        # --- Head ---
+        self.head = nn.Linear(d_model, veg_dim)
+
+    def forward(self, batch):
+        print(batch)
+        # Encode past: veg and weather history → sequence of tokens
+        memory = self.veg_encoder(batch["msc"])  # [B, T_veg, d]
+
+        # Decode: weather forecast queries into past memory
+        forecast_query = self.weather_forecast_encoder(
+            batch["weather_forecast"]
+        )  # [B, T_w, d]
         out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
 
         # Project to vegetation space

@@ -32,6 +32,8 @@ class ContrastiveDataModule(LightningDataModule):
         self.train_years = data_config["contrastive"]["train"]
         self.val_years = data_config["contrastive"]["validation"]
         self.test_years = data_config["contrastive"]["test"]
+        self.batch_sampler = data_config["contrastive"].get("batch_sampler", False)
+        print(self.batch_sampler)
 
     def _build_dataset(self, years):
         return ContrastiveDataset(
@@ -47,19 +49,29 @@ class ContrastiveDataModule(LightningDataModule):
         self.test_dataset = self._build_dataset(years=self.test_years)
 
     def _build_dataloader(self, dataset, shuffle=False):
-        return DataLoader(
-            dataset,
-            # batch_size=self.batch_size,
-            batch_sampler=BatchSampler(
-                dataset=dataset,
-                shuffle=True,
-            ),
-            # shuffle=shuffle,
-            num_workers=self.num_workers,
-            collate_fn=safe_collate,
-            pin_memory=True,
-            persistent_workers=self.num_workers > 0,
-        )
+
+        if self.batch_sampler:
+            return DataLoader(
+                dataset,
+                batch_sampler=BatchSampler(
+                    dataset=dataset,
+                    shuffle=True,
+                ),
+                num_workers=self.num_workers,
+                collate_fn=safe_collate,
+                pin_memory=True,
+                persistent_workers=self.num_workers > 0,
+            )
+        else:
+            return DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                shuffle=shuffle,
+                num_workers=self.num_workers,
+                collate_fn=safe_collate,
+                pin_memory=True,
+                persistent_workers=self.num_workers > 0,
+            )
 
     def train_dataloader(self):
         return self._build_dataloader(self.train_dataset, shuffle=True)
@@ -79,6 +91,7 @@ class ForecastingDataModule(ContrastiveDataModule):
         self.test_years = data_config["forecasting"]["test"]
         self.thresholds_path = data_config["thresholds_path"]
         self.percentiles_path = data_config["percentiles_path"]
+        self.memory_length = data_config["forecasting"]["memory_length"]
 
     def setup(self, stage=None):
         self.train_dataset = self._build_train_dataset(years=self.train_years)
@@ -91,16 +104,17 @@ class ForecastingDataModule(ContrastiveDataModule):
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
             years=years,
+            memory_length=self.memory_length,
         )
 
     def _build_val_dataset(self, years):
         return ForecastingValDataset(
             dataset_path=self.dataset_path,
-            thresholds_path=self.thresholds_path,
             percentiles_path=self.percentiles_path,
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
             years=years,
+            memory_length=self.memory_length,
         )
 
 

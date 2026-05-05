@@ -1,3 +1,4 @@
+from matplotlib.pylab import sample
 import xarray as xr
 import numpy as np
 import torch
@@ -18,7 +19,9 @@ class BaseDataset(Dataset):
     ):
         self.dataset = self.dataset_split(dataset_path=dataset_path, years=years)
         self.num_samples = len(self.dataset.sample)
-        print(f"Dataset loaded with {self.num_samples} samples.")
+        print(
+            f"Dataset loaded with {self.num_samples} samples. years: {[i for i in years]}"
+        )
         self.sentinel2_vars = sentinel2_vars
         self.era5_vars = era5_vars
 
@@ -60,6 +63,7 @@ class BaseDataset(Dataset):
         #   Vegetation
         # Extract year for each timestamp
         veg_years = pd.DatetimeIndex(self.dataset.time_veg.values).year
+        pd.unique(veg_years)
         # Create a dictionary mapping year → array of indices
         self.veg_year_masks = {
             year: (veg_years == year).nonzero()[0] for year in pd.unique(veg_years)
@@ -170,7 +174,7 @@ class ContrastiveDataset(BaseDataset):
             return None
 
 
-class ForecastingTrainDataset(BaseDataset):
+class ForecastingTrainDatasetOld(BaseDataset):
 
     def __init__(
         self,
@@ -209,12 +213,11 @@ class ForecastingTrainDataset(BaseDataset):
             return None
 
 
-class ForecastingValDataset(BaseDataset):
+class ForecastingValDatasetOld(BaseDataset):
 
     def __init__(
         self,
         dataset_path,
-        thresholds_path,
         percentiles_path,
         sentinel2_vars,
         era5_vars,
@@ -279,14 +282,14 @@ class ForecastingValDataset(BaseDataset):
         try:
             sample = self.samples[sample_id]
 
-            veg_hist, weather_hist = sample[year - 1]
+            veg_hist, weather_hist = sample[year - self.memory_length : year - 1]
             veg_forecast, weather_forecast = sample[year]
 
             # msc = self._get_msc(sample)
             max_evi = self._compute_max_evi(veg_forecast)
             sum_precip = self._compute_sum_precip(weather_forecast)
 
-            percentiles_forecast = self.extremes[sample_id][year]
+            # percentiles_forecast = self.extremes[sample_id][year]
 
             self._validate_tensors(
                 veg_hist, weather_hist, veg_forecast, weather_forecast
@@ -296,7 +299,165 @@ class ForecastingValDataset(BaseDataset):
                 "weather_history": weather_hist,
                 "vegetation_forecast": veg_forecast,
                 "weather_forecast": weather_forecast,
-                "percentiles_forecast": percentiles_forecast,
+                # "percentiles_forecast": percentiles_forecast,
+                "max_evi": max_evi,
+                "sum_precip": sum_precip,
+                "location": self.locations[sample_id],
+                "time": torch.tensor(
+                    self.dataset.time_veg.values[self.veg_year_masks[year]]
+                    .astype("datetime64[s]")
+                    .astype(np.int64)
+                ),
+            }
+        except Exception as e:
+            # logging.warning(f"Skipping {(sample_id, year)}: {e}")
+            return None
+
+
+class ForecastingTrainDataset(BaseDataset):
+
+    def __init__(
+        self,
+        dataset_path,
+        sentinel2_vars,
+        era5_vars,
+        years,
+        memory_length,
+    ):
+        super().__init__(
+            dataset_path,
+            sentinel2_vars,
+            era5_vars,
+            years=list(range(years[0] - memory_length, years[-1] + 1)),
+        )
+        self.memory_length = memory_length
+        self._create_training_pairs(years=years)
+
+    def __getitem__(self, idx):
+
+        sample_id, year = self.training_pairs[idx]
+        # try:
+        sample = self.samples[sample_id]
+        past_years = list(range(year - self.memory_length, year))
+        # if len(past_years) > 1:
+        veg_hist = torch.cat([sample[y][0] for y in past_years], dim=0)
+        weather_hist = torch.cat([sample[y][1] for y in past_years], dim=0)
+        # else:
+        #     veg_hist, weather_hist = sample[year - 1]
+        veg_forecast, weather_forecast = sample[year]
+        self._validate_tensors(veg_hist, weather_hist, veg_forecast, weather_forecast)
+
+        return {
+            "vegetation_history": veg_hist,
+            "weather_history": weather_hist,
+            "vegetation_forecast": veg_forecast,
+            "weather_forecast": weather_forecast,
+        }
+        # except Exception as e:
+        #     logging.warning(f"Skipping {(sample_id, year)}: {e}")
+        #     return None
+
+
+class ForecastingValDataset(BaseDataset):
+
+    def __init__(
+        self,
+        dataset_path,
+        percentiles_path,
+        sentinel2_vars,
+        era5_vars,
+        years,
+        memory_length,
+    ):
+        super().__init__(
+            dataset_path,
+            sentinel2_vars,
+            era5_vars,
+            years=list(range(years[0] - memory_length, years[-1] + 1)),
+        )
+
+        self.memory_length = memory_length
+        self._create_training_pairs(
+            years=years
+        )  # year + 1 need to be available for forecasting
+        # self.extremes_dataset = self.additional_dataset(  # could technically download only years[1:], but veg_idx might be an issue
+        #     dataset_path=percentiles_path, years=years
+        # )
+        # self.extremes = [
+        #     self._preload_additional_variable(i, years) for i in range(self.num_samples)
+        # ]
+
+    def additional_dataset(self, dataset_path: str, years: list[int]) -> xr.Dataset:
+        """
+        Create a dataset split containing only data from specified years.
+
+        Args:
+            dataset: Input dataset with time_veg and time_weather dimensions
+            years: List of years to include in this split
+
+        Returns:
+            Dataset filtered to only include samples from the specified years
+        """
+        dataset = xr.open_zarr(dataset_path)
+        dataset = dataset.chunk({"location": 1000, "time": 365})
+
+        if "location" in dataset.dims:
+            dataset = dataset.reset_index("location")
+            dataset = dataset.rename(location="sample")
+        if "time" in dataset.dims:
+            dataset = dataset.sel(
+                time=pd.DatetimeIndex(dataset.time.values).year.isin(years),
+            )
+            dataset = dataset.rename(time="time_veg")
+        return dataset.load()
+
+    def _load_year_additional_tensor(self, sample, year, variables):
+        veg_idx = self.veg_year_masks[year]
+        veg_arr = torch.as_tensor(
+            np.stack([sample[var].values[veg_idx] for var in variables], axis=1),
+            dtype=torch.float32,
+        )
+        return veg_arr
+
+    def _preload_additional_variable(self, sample_id, years):
+        """Precompute tensors for all years of a given sample."""
+        sample = self.extremes_dataset.isel(sample=sample_id)
+        sample_cache = {}
+        for year in years:
+            sample_cache[year] = self._load_year_additional_tensor(
+                sample, year, ["extremes"]
+            )
+        return sample_cache
+
+    def __getitem__(self, idx):
+
+        sample_id, year = self.training_pairs[idx]
+        try:
+            sample = self.samples[sample_id]
+            past_years = list(range(year - self.memory_length, year))
+            # if len(past_years) > 1:
+            veg_hist = torch.cat([sample[y][0] for y in past_years], dim=0)
+            weather_hist = torch.cat([sample[y][1] for y in past_years], dim=0)
+            # else:
+            #     veg_hist, weather_hist = sample[year - 1]
+            veg_forecast, weather_forecast = sample[year]
+
+            msc = self._get_msc(sample)
+            max_evi = self._compute_max_evi(veg_forecast)
+            sum_precip = self._compute_sum_precip(weather_forecast)
+
+            # percentiles_forecast = self.extremes[sample_id][year]
+
+            self._validate_tensors(
+                veg_hist, weather_hist, veg_forecast, weather_forecast
+            )
+            return {
+                "vegetation_history": veg_hist,
+                "weather_history": weather_hist,
+                "vegetation_forecast": veg_forecast,
+                "weather_forecast": weather_forecast,
+                "msc": msc,
+                # "percentiles_forecast": percentiles_forecast,
                 "max_evi": max_evi,
                 "sum_precip": sum_precip,
                 "location": self.locations[sample_id],

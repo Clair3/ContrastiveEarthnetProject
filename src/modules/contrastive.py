@@ -26,7 +26,6 @@ class ContrastiveModule(LightningModule):
         self.encoder_veg = encoder_veg
         self.encoder_weather = encoder_weather
         self.config = cfg
-        print("Initialized ContrastiveModule with config:", self.config)
         self.loss_fn = lambda veg, weather: info_nce_loss(
             veg, weather, temperature=self.config["temperature"]
         )
@@ -99,14 +98,15 @@ class ContrastiveModule(LightningModule):
     def on_validation_epoch_end(self):
         self.probing()
 
-    # def configure_optimizers(self):
-    #     return optim.Adam(
-    #         list(self.encoder_veg.parameters())
-    #         + list(self.encoder_weather.parameters()),
-    #         lr=self.config.lr,
-    #     )
-
     def configure_optimizers(self):
+        print(float(self.config["lr"]))
+        return optim.Adam(
+            list(self.encoder_veg.parameters())
+            + list(self.encoder_weather.parameters()),
+            lr=float(self.config["lr"]),
+        )
+
+    def configure_optimizers2(self):
         lr = float(self.config["lr"])
         warmup_fraction = getattr(self.config, "warmup_fraction", 0)
 
