@@ -75,8 +75,8 @@ def main():
     """Main preprocessing pipeline."""
 
     # Configuration
-    INPUT_DIR = "datasets/S2_evi_5d_update/"
-    OUTPUT_DIR = "datasets/S2_evi_5d_update.zarr"
+    INPUT_DIR = "datasets/S2_evi_16d/"
+    OUTPUT_DIR = "datasets/S2_evi_16d.zarr"
     SCRATCH_DIR = Path(
         "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets"
     )

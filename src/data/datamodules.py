@@ -1,10 +1,16 @@
+import os
 from pathlib import Path
 
 from pytorch_lightning import LightningDataModule
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data import DataLoader
 
-from .datasets import ContrastiveDataset, ForecastingTrainDataset, ForecastingValDataset
+from .datasets import (
+    ContrastiveDataset,
+    ForecastingTrainDataset,
+    ForecastingValDataset,
+    ForecastingAnomTrainDataset,
+)
 from .batch_sampler import BatchSampler
 
 
@@ -99,7 +105,7 @@ class ForecastingDataModule(ContrastiveDataModule):
         self.test_dataset = self._build_val_dataset(years=self.test_years)
 
     def _build_train_dataset(self, years):
-        return ForecastingTrainDataset(
+        return ForecastingAnomTrainDataset(
             dataset_path=self.dataset_path,
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
@@ -108,9 +114,9 @@ class ForecastingDataModule(ContrastiveDataModule):
         )
 
     def _build_val_dataset(self, years):
-        return ForecastingValDataset(
+        return ForecastingAnomTrainDataset(
             dataset_path=self.dataset_path,
-            percentiles_path=self.percentiles_path,
+            # percentiles_path=self.percentiles_path,
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
             years=years,

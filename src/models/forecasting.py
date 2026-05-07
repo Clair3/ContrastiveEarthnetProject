@@ -335,9 +335,8 @@ class TransformerMSC(nn.Module):
         self.head = nn.Linear(d_model, veg_dim)
 
     def forward(self, batch):
-        print(batch)
         # Encode past: veg and weather history → sequence of tokens
-        memory = self.veg_encoder(batch["msc"])  # [B, T_veg, d]
+        memory = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
 
         # Decode: weather forecast queries into past memory
         forecast_query = self.weather_forecast_encoder(

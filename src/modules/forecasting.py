@@ -6,6 +6,7 @@ import xarray as xr
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 
 import torch.nn.functional as F
+from torch import optim
 import torch.nn as nn
 from pytorch_lightning import LightningModule
 
@@ -21,7 +22,8 @@ class ForecastingModule(LightningModule):
         self.config = config
         self.loss_fn = nn.MSELoss()
         self.test_outputs = []
-        os.makedirs(self.config["output_dir"], exist_ok=True)
+        # self.save_hyperparameters(ignore=["model"])
+        os.makedirs(self.config.output_dir, exist_ok=True)
 
     def forward(self, batch):
         return self.model(batch)
@@ -186,9 +188,13 @@ class ForecastingModule(LightningModule):
 
         ds = xr.Dataset(**ds_kwargs)
         # Zarr path
-        pred_path = os.path.join(
-            self.config["output_dir"], f"{self.logger.experiment.id}.zarr"
-        )
+        try:
+            pred_path = os.path.join(
+                self.config.output_dir, f"{self.logger.experiment.id}.zarr"
+            )
+        except:
+            pred_path = os.path.join(self.config.output_dir, f"prediction.zarr")
+
         print(f"Saving predictions to {pred_path}")
 
         ds.to_zarr(
@@ -205,6 +211,9 @@ class ForecastingModule(LightningModule):
 
         self.test_outputs.clear()
 
+    def configure_optimizers1(self):
+        return optim.Adam(self.model.parameters(), lr=float(self.config.lr))
+
     def configure_optimizers(self):
         lr = float(self.config.lr)
         warmup_fraction = getattr(self.config, "warmup_fraction", 0)
@@ -218,7 +227,7 @@ class ForecastingModule(LightningModule):
         warmup_steps = int(warmup_fraction * total_steps)
         warmup = LinearLR(
             optimizer,
-            start_factor=1e-6,
+            start_factor=0.01,
             end_factor=1.0,
             total_iters=warmup_steps,
         )

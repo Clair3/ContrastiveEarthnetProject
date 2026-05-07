@@ -12,8 +12,10 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 torch.set_float32_matmul_precision("medium")
 
 from pathlib import Path
+from types import SimpleNamespace
 from copy import deepcopy
 from contextlib import contextmanager
+
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import (
@@ -46,8 +48,11 @@ def load_config(config_path: str) -> dict:
 
 class BaseExperiment:
     def __init__(self, config, data_config):
+        if isinstance(config, dict):
+            config = SimpleNamespace(**config)
         self.config = config
         self.data_config = data_config
+        self.logger = WandbLogger(project="contrastive-earthnet", log_model="best")
 
     def build_datamodule(self):
         raise NotImplementedError
@@ -79,6 +84,23 @@ class BaseExperiment:
 
         return [checkpoint, early_stop, lr_monitor]
 
+    def build_trainer(self, logger=None):
+        return Trainer(
+            max_epochs=self.config.max_epochs,
+            accelerator="gpu",
+            devices=self.config.gpu_device,
+            precision="16-mixed",
+            logger=logger,
+            callbacks=self.build_callbacks(wandb.run.id) if wandb.run else None,
+            log_every_n_steps=32,
+            gradient_clip_val=self.config.gradient_clip_val,
+            deterministic=True,
+            accumulate_grad_batches=(
+                30 if self.data_config["contrastive"].get("batch_sampler", False) else 1
+            ),
+            enable_progress_bar=True,
+        )
+
     def run(self, profile_resources=False):
         datamodule = self.build_datamodule()
         model = self.build_model()
@@ -88,28 +110,25 @@ class BaseExperiment:
             self.estimate_batch_resources(model, datamodule)
             return  # skip full training
 
-        self.logger = WandbLogger(project="contrastive-earthnet", log_model="best")
-
-        trainer = Trainer(
-            max_epochs=self.config.max_epochs,
-            accelerator="gpu",
-            devices=self.config.gpu_device,
-            precision="16-mixed",
-            logger=self.logger,
-            callbacks=self.build_callbacks(wandb.run.id),
-            log_every_n_steps=32,
-            gradient_clip_val=self.config.get("gradient_clip_val", 1.0),
-            deterministic=True,
-            accumulate_grad_batches=(
-                30 if self.data_config["contrastive"].get("batch_sampler", False) else 1
-            ),
-            # profiler="simple",
-            enable_progress_bar=True,
-        )
-
+        trainer = self.build_trainer(logger=self.logger)
         trainer.fit(model, datamodule)
+
         ckpt_path = trainer.checkpoint_callback.best_model_path
         trainer.test(model=None, datamodule=datamodule, ckpt_path=ckpt_path)
+
+    def eval(self, run_name):
+        ckpt_path = CHECKPOINT_DIR / run_name / "best.ckpt"
+        datamodule = self.build_datamodule()
+
+        model = self.build_model()
+
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+
+        model.load_state_dict(ckpt["state_dict"])
+
+        trainer = self.build_trainer(logger=False)
+
+        trainer.test(model=model, datamodule=datamodule)
 
     @staticmethod
     def estimate_batch_resources(model, datamodule, device="cuda"):
@@ -190,11 +209,11 @@ class ContrastiveExperiment(BaseExperiment):
 class ForecastingExperiment(BaseExperiment):
 
     def build_datamodule(self):
-        self.data_config["forecasting"]["memory_length"] = self.config["memory_length"]
+        self.data_config["forecasting"]["memory_length"] = self.config.memory_length
         return ForecastingDataModule(
             data_config=self.data_config,
             batch_size=self.config.batch_size,
-            num_workers=self.config["num_workers"],
+            num_workers=self.config.num_workers,
         )
 
     def build_model(self):
@@ -211,6 +230,7 @@ class ForecastingExperiment(BaseExperiment):
                 data_config=self.data_config,
                 config=self.config,
             )
+
         forecasting_module = ForecastingModule(
             model=self.model,
             config=self.config,
@@ -249,15 +269,21 @@ class PretrainThenForecastExperiment(BaseExperiment):
 
 
 @contextmanager
-def wandb_run(config, group=None, project="contrastive-earthnet"):
-    run = wandb.init(project=project, group=group, config=config)
-    try:
+def wandb_run(config, group=None, project="contrastive-earthnet", run_name=None):
+    if run_name is not None:
+        api = wandb.Api()
+        run = api.run(f"paper_2/{project}/{run_name}")
         yield run.config
-    finally:
-        run.finish()
+
+    else:
+        run = wandb.init(project=project, group=group, config=config)
+        try:
+            yield run.config
+        finally:
+            run.finish()
 
 
-def run_experiment(config, data_config, profile_resources=False):
+def run_experiment(config, data_config, profile_resources=False, run_name=None):
     task = config["task"]
 
     if task == "contrastive":
@@ -268,8 +294,10 @@ def run_experiment(config, data_config, profile_resources=False):
         experiment = PretrainThenForecastExperiment(config, data_config)
     else:
         raise ValueError(f"Unknown experiment task: {task}")
-
-    experiment.run(profile_resources=profile_resources)
+    if run_name is not None:
+        experiment.eval(run_name=run_name)
+    else:
+        experiment.run(profile_resources=profile_resources)
 
 
 def get_folds(data_config, task, kfolds=True):
@@ -283,8 +311,8 @@ def get_folds(data_config, task, kfolds=True):
 def run_pipeline(
     train_config_file="models/mlp.yaml",
     data_config_file="data_config.yaml",
-    kfolds=False,
-    name_experiment="",
+    experiment_name="",
+    run_name=None,
     profile_resources=False,
 ):
     """
@@ -361,7 +389,7 @@ def run_pipeline(
         / data_config["vegetation"]["sensor"]
         / train_config["model_name"]
     )
-    base_output_dir = base_output_dir / name_experiment
+    base_output_dir = base_output_dir / experiment_name
     time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     # fold_list = get_folds(data_config, train_config["task"], kfolds=kfolds)
@@ -376,12 +404,12 @@ def run_pipeline(
     # data_config["forecasting"]["validation"] = val_years
     # data_config["forecasting"]["test"] = test_years
     with wandb_run(
-        fold_config,
-        group=fold_config["model_name"],
+        fold_config, group=fold_config["model_name"], run_name=run_name
     ) as config:
         run_experiment(
             config,
             data_config,
+            run_name=run_name,
             profile_resources=profile_resources,
         )
 
@@ -393,18 +421,18 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/transformer_msc.yaml",  # _pretrain_forecast.yaml",
+        default="defaults/transformer_baseline.yaml",  # _pretrain_forecast.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config_Sentinel-2_2.yaml",
+        default="data_config_VIIRS_memory.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
     parser.add_argument(
-        "--kfolds",
-        default=False,
-        help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
+        "--run_name",
+        default="j1oq2t6k",
+        help="Path of the model weights. If None, the training of the experiment is executed. If a path is provided, the evaluation mode is executed.",
     )
     parser.add_argument(
         "--mode",
@@ -414,9 +442,9 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--name_experiment",
-        default="modality_flag",
-        help="Execution mode: 'single' for standard train/val/test split, 'tune' for hyperparameter tuning on a single fold, 'kfold' for k-fold cross-validation with predefined folds",
+        "--experiment_name",
+        default="anomalies",
+        help="name of the folder used to save the test set (outputs/predictions/dataset/model/experiment_name/time)",
     )
 
     parser.add_argument(
@@ -427,18 +455,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.kfolds and "sweep" in args.train_config_file.lower():
-        print(
-            f"\nERROR: Attempting k-fold evaluation with a sweep config '{args.train_config_file}'!\n Use a fixed hyperparameter config instead to ensure all folds use the same parameters.\n"
-        )
-        sys.exit(1)
-
     print(f"args are: {args}")
 
     run_pipeline(
         train_config_file=args.train_config_file,
         data_config_file=args.data_config_file,
-        kfolds=args.kfolds,
-        name_experiment=args.name_experiment,
+        experiment_name=args.experiment_name,
         profile_resources=args.profile_resources,
+        run_name=args.run_name,
     )

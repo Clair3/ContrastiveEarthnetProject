@@ -61,9 +61,19 @@ class Sentinel2Preprocessing:
             ds, noise_half_windows=self.noise_half_windows, gapfill=self.gapfill
         )
 
-        msc = self.compute_msc(ds[f"{self.index.lower()}"])
-        ds["msc"] = msc
+        ds["msc"] = self.compute_msc(ds[f"{self.index.lower()}"])
+        ds["anomalies"] = self.compute_anomalies(ds[f"{self.index.lower()}"], ds["msc"])
         return ds.isel(location=0)  # remove location dim
+
+    def compute_anomalies(self, veg_index, msc):
+        aligned_msc = msc.sel(dayofyear=veg_index["time.dayofyear"])
+        deseasonalized = veg_index - aligned_msc
+        deseasonalized = deseasonalized.reset_coords("dayofyear", drop=True)
+
+        mean_veg = deseasonalized.mean(dim="time")
+        std_veg = deseasonalized.std(dim="time")
+        anomalies = (deseasonalized - mean_veg) / (std_veg + 1e-8)
+        return anomalies
 
     def _ensure_coordinates(self, ds):
         """Transforms UTM coordinates to latitude and longitude."""
@@ -284,7 +294,7 @@ class NoiseRemovalHelper(ABC):
         before_max = self._compute_shifted_max(data, half_window, direction=1)
         after_max = self._compute_shifted_max(data, half_window, direction=-1)
 
-        is_cloud = (data + 0.05 < before_max) & (data + 0.05 < after_max)
+        is_cloud = (data + 0.1 < before_max) & (data + 0.1 < after_max)
 
         if gapfill:
             replacement_values = (before_max + after_max) / 2

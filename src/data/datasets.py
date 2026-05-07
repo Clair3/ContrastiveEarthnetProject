@@ -27,7 +27,6 @@ class BaseDataset(Dataset):
 
         # Pre-compute year masks once during init
         self._precompute_year_indices()
-        self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
         self.locations = list(
             zip(self.dataset.latitude.values, self.dataset.longitude.values)
         )
@@ -63,7 +62,6 @@ class BaseDataset(Dataset):
         #   Vegetation
         # Extract year for each timestamp
         veg_years = pd.DatetimeIndex(self.dataset.time_veg.values).year
-        pd.unique(veg_years)
         # Create a dictionary mapping year → array of indices
         self.veg_year_masks = {
             year: (veg_years == year).nonzero()[0] for year in pd.unique(veg_years)
@@ -75,12 +73,6 @@ class BaseDataset(Dataset):
             year: (weather_years == year).nonzero()[0]
             for year in pd.unique(weather_years)
         }
-
-    def deseasonalize(self, data, msc):
-        aligned_msc = msc.sel(dayofyear=data["time_veg.dayofyear"])
-        deseasonalized = data - aligned_msc
-        deseasonalized = deseasonalized.reset_coords("dayofyear", drop=True)
-        return deseasonalized
 
     def _load_year_tensor(self, sample, year):
         veg_idx = self.veg_year_masks[year]
@@ -121,7 +113,7 @@ class BaseDataset(Dataset):
     def _get_msc(self, sample):
         msc = sample["msc"]
         msc_arr = torch.as_tensor(
-            np.stack([msc], axis=1),
+            msc,
             dtype=torch.float32,
         )
         return msc_arr
@@ -151,6 +143,7 @@ class ContrastiveDataset(BaseDataset):
 
         super().__init__(dataset_path, sentinel2_vars, era5_vars, years)
         self._create_training_pairs(years=years)
+        self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
 
     def __getitem__(self, idx) -> dict | None:
         sample_id, year = self.training_pairs[idx]
@@ -332,6 +325,7 @@ class ForecastingTrainDataset(BaseDataset):
         )
         self.memory_length = memory_length
         self._create_training_pairs(years=years)
+        self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
 
     def __getitem__(self, idx):
 
@@ -456,7 +450,6 @@ class ForecastingValDataset(BaseDataset):
                 "weather_history": weather_hist,
                 "vegetation_forecast": veg_forecast,
                 "weather_forecast": weather_forecast,
-                "msc": msc,
                 # "percentiles_forecast": percentiles_forecast,
                 "max_evi": max_evi,
                 "sum_precip": sum_precip,
@@ -466,6 +459,84 @@ class ForecastingValDataset(BaseDataset):
                     .astype("datetime64[s]")
                     .astype(np.int64)
                 ),
+            }
+        except Exception as e:
+            # logging.warning(f"Skipping {(sample_id, year)}: {e}")
+            return None
+
+
+class ForecastingAnomTrainDataset(BaseDataset):
+
+    def __init__(
+        self,
+        dataset_path,
+        sentinel2_vars,
+        era5_vars,
+        years,
+        memory_length,
+    ):
+        years = list(range(years[0] - memory_length, years[-1] + 1))
+        super().__init__(
+            dataset_path,
+            sentinel2_vars,
+            era5_vars,
+            years=years,
+        )
+        self._create_training_pairs(years=years[1:])
+        self.msc = [self._preload_msc(i) for i in range(self.num_samples)]
+        self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
+
+    def _preload_sample(self, sample_id, years):
+        """Precompute tensors for all years of a given sample."""
+        sample = self.dataset.isel(sample=sample_id)
+        sample_cache = {}
+        for year in years:
+            sample_cache[year] = self._load_year_tensor(sample, year)
+        return sample_cache
+
+    def _preload_msc(self, sample_id):
+        msc = self.dataset.isel(sample=sample_id).msc
+        if msc.size == 366:
+            msc = msc.drop_isel(dayofyear=59)  # leap year
+        msc_arr = torch.as_tensor(
+            msc.values,
+            dtype=torch.float32,
+        ).unsqueeze(-1)
+        return msc_arr
+
+    def _load_year_tensor(self, sample, year):
+        veg_idx = self.veg_year_masks[year]
+        weather_idx = self.weather_year_masks[year]
+        anom_arr = torch.as_tensor(
+            sample["anomalies"].values[veg_idx],
+            dtype=torch.float32,
+        ).unsqueeze(
+            -1
+        )  # T, C=1
+        weather_arr = torch.as_tensor(
+            np.stack(
+                [sample[var].values[weather_idx] for var in self.era5_vars], axis=1
+            ),
+            dtype=torch.float32,
+        )
+
+        return anom_arr, weather_arr
+
+    def __getitem__(self, idx):
+        sample_id, year = self.training_pairs[idx]
+        try:
+            sample = self.samples[sample_id]
+            msc = self.msc[sample_id]
+            anom_hist, weather_hist = sample[year - 1]
+            anom_forecast, weather_forecast = sample[year]
+            self._validate_tensors(anom_hist, anom_forecast, weather_forecast)
+
+            return {
+                "vegetation_history": anom_hist,
+                "weather_history": weather_hist,
+                "vegetation_forecast": anom_forecast,
+                "weather_forecast": weather_forecast,
+                "location": self.locations[sample_id],
             }
         except Exception as e:
             # logging.warning(f"Skipping {(sample_id, year)}: {e}")

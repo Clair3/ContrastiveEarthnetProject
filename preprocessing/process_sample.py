@@ -189,7 +189,7 @@ def parse_args():
         "--n-jobs", type=int, default=None, help="Number of processes for multiproc"
     )
     p.add_argument("--output-dir", type=str, required=True)
-    p.add_argument("--temporal-resolution-veg", type=int, default=5)
+    p.add_argument("--temporal-resolution-veg", type=int, default=16)
     p.add_argument("--temporal-resolution-weather", type=int, default=5)
     return p.parse_args()
 
