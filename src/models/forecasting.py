@@ -188,7 +188,7 @@ class TransformerBaseline(nn.Module):
         weather_dim = len(data_config["weather"]["variables"])
         T_veg = data_config["vegetation"]["sequence_length"]
         T_weather = data_config["weather"]["sequence_length"]
-        memory_length = config.memory_length
+        lookback_length = config.lookback_length
 
         d_model = config.d_model
 
@@ -205,7 +205,7 @@ class TransformerBaseline(nn.Module):
             )
             self.veg_encoder = TimeSeriesTransformerEncoder(
                 input_dim=veg_dim,
-                sequence_length=T_veg * memory_length,
+                sequence_length=T_veg * lookback_length,
                 d_model=d_model,
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,
@@ -216,7 +216,7 @@ class TransformerBaseline(nn.Module):
 
             self.weather_encoder = TimeSeriesTransformerEncoder(
                 input_dim=weather_dim,
-                sequence_length=T_weather * memory_length,
+                sequence_length=T_weather * lookback_length,
                 d_model=d_model,
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,
@@ -280,7 +280,7 @@ class TransformerMSC(nn.Module):
         weather_dim = len(data_config["weather"]["variables"])
         T_veg = data_config["vegetation"]["sequence_length"]
         T_weather = data_config["weather"]["sequence_length"]
-        memory_length = config.memory_length
+        lookback_length = config.lookback_length
 
         d_model = config.d_model
 
@@ -297,7 +297,7 @@ class TransformerMSC(nn.Module):
             )
             self.veg_encoder = TimeSeriesTransformerEncoder(
                 input_dim=veg_dim,
-                sequence_length=T_veg * memory_length,
+                sequence_length=T_veg * lookback_length,
                 d_model=d_model,
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,

@@ -97,7 +97,7 @@ class ForecastingDataModule(ContrastiveDataModule):
         self.test_years = data_config["forecasting"]["test"]
         self.thresholds_path = data_config["thresholds_path"]
         self.percentiles_path = data_config["percentiles_path"]
-        self.memory_length = data_config["forecasting"]["memory_length"]
+        self.lookback_length = data_config["forecasting"]["lookback_length"]
 
     def setup(self, stage=None):
         self.train_dataset = self._build_train_dataset(years=self.train_years)
@@ -110,7 +110,7 @@ class ForecastingDataModule(ContrastiveDataModule):
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
             years=years,
-            memory_length=self.memory_length,
+            lookback_length=self.lookback_length,
         )
 
     def _build_val_dataset(self, years):
@@ -120,7 +120,7 @@ class ForecastingDataModule(ContrastiveDataModule):
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
             years=years,
-            memory_length=self.memory_length,
+            lookback_length=self.lookback_length,
         )
 
 

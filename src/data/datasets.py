@@ -475,16 +475,18 @@ class ForecastingAnomTrainDataset(BaseDataset):
         years,
         memory_length,
     ):
-        years = list(range(years[0] - memory_length, years[-1] + 1))
+        years_with_memory = list(range(years[0] - memory_length, years[-1] + 1))
         super().__init__(
             dataset_path,
             sentinel2_vars,
             era5_vars,
-            years=years,
+            years=years_with_memory,
         )
-        self._create_training_pairs(years=years[1:])
+        self._create_training_pairs(years=years)
         self.msc = [self._preload_msc(i) for i in range(self.num_samples)]
-        self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
+        self.samples = [
+            self._preload_sample(i, years_with_memory) for i in range(self.num_samples)
+        ]
 
     def _preload_sample(self, sample_id, years):
         """Precompute tensors for all years of a given sample."""
@@ -527,7 +529,7 @@ class ForecastingAnomTrainDataset(BaseDataset):
         try:
             sample = self.samples[sample_id]
             msc = self.msc[sample_id]
-            anom_hist, weather_hist = sample[year - 1]
+            anom_hist, weather_hist = sample[year - 2]
             anom_forecast, weather_forecast = sample[year]
             self._validate_tensors(anom_hist, anom_forecast, weather_forecast)
 

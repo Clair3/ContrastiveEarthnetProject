@@ -1,16 +1,9 @@
 from datetime import datetime
 import os
-import sys
 import torch
 import wandb
 import yaml
 import argparse
-import warnings
-
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-torch.set_float32_matmul_precision("medium")
-
 from pathlib import Path
 from types import SimpleNamespace
 from copy import deepcopy
@@ -23,7 +16,6 @@ from pytorch_lightning.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
 )
-import torch.nn as nn
 
 from data import ContrastiveDataModule, ForecastingDataModule
 from modules import ContrastiveModule, ForecastingModule
@@ -209,7 +201,7 @@ class ContrastiveExperiment(BaseExperiment):
 class ForecastingExperiment(BaseExperiment):
 
     def build_datamodule(self):
-        self.data_config["forecasting"]["memory_length"] = self.config.memory_length
+        self.data_config["forecasting"]["lookback_length"] = self.config.lookback_length
         return ForecastingDataModule(
             data_config=self.data_config,
             batch_size=self.config.batch_size,
@@ -389,20 +381,17 @@ def run_pipeline(
         / data_config["vegetation"]["sensor"]
         / train_config["model_name"]
     )
-    base_output_dir = base_output_dir / experiment_name
-    time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    # fold_list = get_folds(data_config, train_config["task"], kfolds=kfolds)
+    train_config["output_dir"] = (
+        base_output_dir
+        / experiment_name
+        / Path(str(datetime.now().strftime("%Y-%m-%d_%H-%M-%S")))
+        / str(data_config["forecasting"]["test"][-1])
+    )
+    os.makedirs(train_config["output_dir"], exist_ok=True)
 
-    # for train_years, val_years, test_years in fold_list:
-    folder = Path(str(time)) / str(data_config["forecasting"]["test"][-1])
-
-    train_config["output_dir"] = base_output_dir / folder
     fold_config = deepcopy(train_config)
 
-    # data_config["forecasting"]["train"] = train_years
-    # data_config["forecasting"]["validation"] = val_years
-    # data_config["forecasting"]["test"] = test_years
     with wandb_run(
         fold_config, group=fold_config["model_name"], run_name=run_name
     ) as config:
@@ -431,7 +420,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--run_name",
-        default="j1oq2t6k",
+        default="53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k",
         help="Path of the model weights. If None, the training of the experiment is executed. If a path is provided, the evaluation mode is executed.",
     )
     parser.add_argument(

@@ -22,8 +22,6 @@ class ForecastingModule(LightningModule):
         self.config = config
         self.loss_fn = nn.MSELoss()
         self.test_outputs = []
-        # self.save_hyperparameters(ignore=["model"])
-        os.makedirs(self.config.output_dir, exist_ok=True)
 
     def forward(self, batch):
         return self.model(batch)
