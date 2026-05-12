@@ -201,7 +201,7 @@ class ContrastiveExperiment(BaseExperiment):
 class ForecastingExperiment(BaseExperiment):
 
     def build_datamodule(self):
-        self.data_config["forecasting"]["lookback_length"] = self.config.lookback_length
+        self.data_config["forecasting"]["memory_length"] = self.config.memory_length
         return ForecastingDataModule(
             data_config=self.data_config,
             batch_size=self.config.batch_size,
@@ -410,17 +410,17 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/transformer_baseline.yaml",  # _pretrain_forecast.yaml",
+        default="defaults/transformer_contrastive.yaml",  # _pretrain_forecast.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config_VIIRS_memory.yaml",
+        default="data_config_MODIS.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--run_name",
-        default="53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k",
+        default=None,  # "g4u7970n",  # "k6qige6q",  # "qoj0owg6",  # "53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k", "qoj0owg6",  #
         help="Path of the model weights. If None, the training of the experiment is executed. If a path is provided, the evaluation mode is executed.",
     )
     parser.add_argument(
@@ -432,7 +432,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--experiment_name",
-        default="anomalies",
+        default="time_agg_loss",
         help="name of the folder used to save the test set (outputs/predictions/dataset/model/experiment_name/time)",
     )
 

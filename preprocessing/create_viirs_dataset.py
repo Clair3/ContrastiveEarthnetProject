@@ -215,19 +215,29 @@ def normalize_weather_variables(
     return dataset_out
 
 
+def compute_anomalies(veg_index, msc):
+    aligned_msc = msc.sel(dayofyear=veg_index["time_veg.dayofyear"])
+    deseasonalized = veg_index - aligned_msc
+    deseasonalized = deseasonalized.reset_coords("dayofyear", drop=True)
+    mean_veg = deseasonalized.mean(dim="time_veg")
+    std_veg = deseasonalized.std(dim="time_veg")
+    anomalies = (deseasonalized - mean_veg) / (std_veg + 1e-8)
+    return anomalies
+
+
 def main():
     """Main preprocessing pipeline."""
 
     # Configuration
-    OUTPUT_DIR = "datasets/VIIRS_evi_daily_10.zarr"
+    OUTPUT_DIR = "datasets/MODIS_evi.zarr"
     SCRATCH_DIR = Path(
         "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets"
     )
 
-    SAMPLES_PATHS = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/sample_paths_10.txt"
+    SAMPLES_PATHS = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/sample_paths.txt"
 
-    VIIRS_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/VIIRS_gapfilled.zarr/EVIgapfilled_002_QCfix.zarr"  # VIIRS_gapfilled.zarr"
-    VIIRS_VARIABLE = "EVIgapfilled_QCfix"
+    VIIRS_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/MODIS_gapfilled061.zarr/EVIgapfilled_061_QCdyn.zarr"  # "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/VIIRS_gapfilled.zarr/EVIgapfilled_002_QCfix.zarr"  # VIIRS_gapfilled.zarr"
+    VIIRS_VARIABLE = "EVIgapfilled_QCdyn"
 
     ERA5_PATH = (
         "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/ERA5_daily.zarr"
@@ -250,7 +260,7 @@ def main():
     viirs, era = xr.align(viirs, era, join="inner")
     ds = xr.merge([viirs, era], compat="override")
 
-    ds = ds.sel(time=slice("2012-01-01T12:00:00", "2025-12-31T12:00:00"))
+    ds = ds.sel(time=slice("2002-01-01T12:00:00", "2025-12-31T12:00:00"))
     ds = ds.sel(time=~((ds["time"].dt.month == 2) & (ds["time"].dt.day == 29)))
     #
     # ds["evi"] = ds.evi.groupby("time.year").map(
@@ -277,7 +287,14 @@ def main():
     ds_weather = normalize_weather_variables(ds_weather, WEATHER_VARS)
 
     doy = ds_veg["time_veg"].dt.dayofyear
-    msc = ds_veg["evi"].groupby(doy).mean("time_veg")
+    msc = ds_veg[VEG_VARS].groupby(doy).mean("time_veg")
+
+    ds_veg["anomalies"] = compute_anomalies(ds_veg[VEG_VARS], msc)
+
+    # normalize MSC globally
+    mean_msc = msc.mean(dim="dayofyear")
+    std_msc = msc.std(dim="dayofyear")
+    msc = (msc - mean_msc) / (std_msc + 1e-8)
 
     dataset = xr.merge([ds_veg, ds_weather, msc.rename("msc")])
 

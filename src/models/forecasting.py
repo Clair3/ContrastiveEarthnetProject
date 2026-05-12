@@ -184,11 +184,11 @@ class LSTM(nn.Module):
 class TransformerBaseline(nn.Module):
     def __init__(self, data_config, config, pretrained_encoders=None):
         super().__init__()
-        veg_dim = len(data_config["vegetation"]["variables"])
+        veg_dim = len(data_config["vegetation"]["variables"])  # + 1
         weather_dim = len(data_config["weather"]["variables"])
         T_veg = data_config["vegetation"]["sequence_length"]
         T_weather = data_config["weather"]["sequence_length"]
-        lookback_length = config.lookback_length
+        memory_length = config.memory_length
 
         d_model = config.d_model
 
@@ -204,8 +204,8 @@ class TransformerBaseline(nn.Module):
                 f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
             )
             self.veg_encoder = TimeSeriesTransformerEncoder(
-                input_dim=veg_dim,
-                sequence_length=T_veg * lookback_length,
+                input_dim=veg_dim + 1,
+                sequence_length=T_veg * memory_length,
                 d_model=d_model,
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,
@@ -216,7 +216,7 @@ class TransformerBaseline(nn.Module):
 
             self.weather_encoder = TimeSeriesTransformerEncoder(
                 input_dim=weather_dim,
-                sequence_length=T_weather * lookback_length,
+                sequence_length=T_weather * memory_length,
                 d_model=d_model,
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,
@@ -255,8 +255,16 @@ class TransformerBaseline(nn.Module):
 
     def forward(self, batch):
         # Encode past: veg and weather history → sequence of tokens
+        # batch["msc"] = torch.zeros_like(batch["msc"])
+        veg_input = torch.cat(
+            [
+                batch["vegetation_history"],
+                batch["msc"],
+            ],
+            dim=-1,
+        )
 
-        veg_mem = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
+        veg_mem = self.veg_encoder(veg_input)  # [B, T_veg, d]
         weather_mem = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
 
         # Past memory = concat along sequence dim (not feature dim)
@@ -273,6 +281,174 @@ class TransformerBaseline(nn.Module):
         return out
 
 
+class TransformerEncoderOnly(nn.Module):
+    def __init__(self, data_config, config):
+        super().__init__()
+
+        veg_dim = len(data_config["vegetation"]["variables"])
+        weather_dim = len(data_config["weather"]["variables"])
+
+        T_veg = data_config["vegetation"]["sequence_length"]
+        T_weather = data_config["weather"]["sequence_length"]
+
+        memory_length = config.memory_length
+
+        self.T_future = T_veg
+
+        d_model = config.d_model
+
+        # ---------------------------------------------------
+        # Input projections
+        # ---------------------------------------------------
+
+        # vegetation + MSC
+        self.veg_embed = nn.Linear(veg_dim + 1, d_model)
+
+        # weather
+        self.weather_embed = nn.Linear(weather_dim, d_model)
+
+        # learned future vegetation tokens
+        self.future_queries = nn.Parameter(torch.randn(T_veg, d_model))
+
+        # ---------------------------------------------------
+        # Token type embeddings
+        # ---------------------------------------------------
+
+        self.token_type_embed = nn.Embedding(4, d_model)
+
+        # 0 = past vegetation
+        # 1 = past weather
+        # 2 = future weather
+        # 3 = future vegetation query
+
+        # ---------------------------------------------------
+        # Transformer encoder
+        # ---------------------------------------------------
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=config.num_heads,
+            dropout=config.dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=config.num_layers,
+        )
+
+        # ---------------------------------------------------
+        # Output head
+        # ---------------------------------------------------
+
+        self.head = nn.Linear(d_model, veg_dim)
+
+    def forward(self, batch):
+
+        B = batch["vegetation_history"].shape[0]
+
+        # ===================================================
+        # Past vegetation tokens
+        # ===================================================
+
+        veg_input = torch.cat(
+            [
+                batch["vegetation_history"],
+                batch["msc"],
+            ],
+            dim=-1,
+        )
+
+        veg_tokens = self.veg_embed(veg_input)
+
+        veg_tokens = veg_tokens + self.token_type_embed(
+            torch.zeros(
+                veg_tokens.shape[1],
+                device=veg_tokens.device,
+                dtype=torch.long,
+            )
+        )
+
+        # ===================================================
+        # Past weather tokens
+        # ===================================================
+
+        weather_hist_tokens = self.weather_embed(batch["weather_history"])
+
+        weather_hist_tokens = weather_hist_tokens + self.token_type_embed(
+            torch.ones(
+                weather_hist_tokens.shape[1],
+                device=weather_hist_tokens.device,
+                dtype=torch.long,
+            )
+        )
+
+        # ===================================================
+        # Future weather tokens
+        # ===================================================
+
+        weather_future_tokens = self.weather_embed(batch["weather_forecast"])
+
+        weather_future_tokens = weather_future_tokens + self.token_type_embed(
+            torch.full(
+                (weather_future_tokens.shape[1],),
+                2,
+                device=weather_future_tokens.device,
+                dtype=torch.long,
+            )
+        )
+
+        # ===================================================
+        # Future vegetation query tokens
+        # ===================================================
+
+        future_queries = self.future_queries.unsqueeze(0).repeat(B, 1, 1)
+
+        future_queries = future_queries + self.token_type_embed(
+            torch.full(
+                (future_queries.shape[1],),
+                3,
+                device=future_queries.device,
+                dtype=torch.long,
+            )
+        )
+
+        # ===================================================
+        # Concatenate all tokens
+        # ===================================================
+
+        tokens = torch.cat(
+            [
+                veg_tokens,
+                weather_hist_tokens,
+                weather_future_tokens,
+                future_queries,
+            ],
+            dim=1,
+        )
+
+        # ===================================================
+        # Transformer encoder
+        # ===================================================
+
+        encoded = self.encoder(tokens)
+
+        # ===================================================
+        # Extract future vegetation representations
+        # ===================================================
+
+        future_repr = encoded[:, -self.T_future :, :]
+
+        # ===================================================
+        # Predict vegetation anomalies
+        # ===================================================
+
+        out = self.head(future_repr)
+
+        return out
+
+
 class TransformerMSC(nn.Module):
     def __init__(self, data_config, config, pretrained_encoders=None):
         super().__init__()
@@ -280,7 +456,7 @@ class TransformerMSC(nn.Module):
         weather_dim = len(data_config["weather"]["variables"])
         T_veg = data_config["vegetation"]["sequence_length"]
         T_weather = data_config["weather"]["sequence_length"]
-        lookback_length = config.lookback_length
+        memory_length = config.memory_length
 
         d_model = config.d_model
 
@@ -297,7 +473,7 @@ class TransformerMSC(nn.Module):
             )
             self.veg_encoder = TimeSeriesTransformerEncoder(
                 input_dim=veg_dim,
-                sequence_length=T_veg * lookback_length,
+                sequence_length=T_veg * memory_length,
                 d_model=d_model,
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,

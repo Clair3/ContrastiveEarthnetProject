@@ -6,6 +6,7 @@ import logging
 import pandas as pd
 from torch.utils.data import Dataset
 import copy
+import random
 
 
 class BaseDataset(Dataset):
@@ -73,6 +74,16 @@ class BaseDataset(Dataset):
             year: (weather_years == year).nonzero()[0]
             for year in pd.unique(weather_years)
         }
+
+    def _preload_msc(self, sample_id):
+        msc = self.dataset.isel(sample=sample_id).msc
+        if msc.size == 366:
+            msc = msc.drop_isel(dayofyear=59)  # leap year
+        msc_arr = torch.as_tensor(
+            msc.values * 5,
+            dtype=torch.float32,
+        ).unsqueeze(-1)
+        return msc_arr
 
     def _load_year_tensor(self, sample, year):
         veg_idx = self.veg_year_masks[year]
@@ -144,14 +155,16 @@ class ContrastiveDataset(BaseDataset):
         super().__init__(dataset_path, sentinel2_vars, era5_vars, years)
         self._create_training_pairs(years=years)
         self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
+        self.msc = [self._preload_msc(i) for i in range(self.num_samples)]
 
     def __getitem__(self, idx) -> dict | None:
         sample_id, year = self.training_pairs[idx]
         try:
             vegetation, weather = self.samples[sample_id][year]
+            msc = self.msc[sample_id]
             self._validate_tensors(vegetation, weather)
 
-            max_evi = self._compute_max_evi(vegetation)
+            max_evi = self._compute_max_evi(vegetation, msc)
             sum_precip = self._compute_sum_precip(weather)
 
             data = {
@@ -475,17 +488,20 @@ class ForecastingAnomTrainDataset(BaseDataset):
         years,
         memory_length,
     ):
-        years_with_memory = list(range(years[0] - memory_length, years[-1] + 1))
         super().__init__(
             dataset_path,
             sentinel2_vars,
             era5_vars,
-            years=years_with_memory,
+            years=list(range(years[0] - memory_length, years[-1] + 1)),
         )
+        self.memory_length = memory_length
         self._create_training_pairs(years=years)
         self.msc = [self._preload_msc(i) for i in range(self.num_samples)]
         self.samples = [
-            self._preload_sample(i, years_with_memory) for i in range(self.num_samples)
+            self._preload_sample(
+                i, list(range(years[0] - memory_length, years[-1] + 1))
+            )
+            for i in range(self.num_samples)
         ]
 
     def _preload_sample(self, sample_id, years):
@@ -495,16 +511,6 @@ class ForecastingAnomTrainDataset(BaseDataset):
         for year in years:
             sample_cache[year] = self._load_year_tensor(sample, year)
         return sample_cache
-
-    def _preload_msc(self, sample_id):
-        msc = self.dataset.isel(sample=sample_id).msc
-        if msc.size == 366:
-            msc = msc.drop_isel(dayofyear=59)  # leap year
-        msc_arr = torch.as_tensor(
-            msc.values,
-            dtype=torch.float32,
-        ).unsqueeze(-1)
-        return msc_arr
 
     def _load_year_tensor(self, sample, year):
         veg_idx = self.veg_year_masks[year]
@@ -528,16 +534,51 @@ class ForecastingAnomTrainDataset(BaseDataset):
         sample_id, year = self.training_pairs[idx]
         try:
             sample = self.samples[sample_id]
-            msc = self.msc[sample_id]
-            anom_hist, weather_hist = sample[year - 2]
+            past_years = list(range(year - self.memory_length, year))
+            anom_hist = torch.cat([sample[y][0] for y in past_years], dim=0)
+            weather_hist = torch.cat([sample[y][1] for y in past_years], dim=0)
             anom_forecast, weather_forecast = sample[year]
+            msc = self.msc[sample_id]
             self._validate_tensors(anom_hist, anom_forecast, weather_forecast)
 
+            forecast_len = anom_forecast.shape[0]
+            window_size = random.randint(30, 180)
+            start = random.randint(0, forecast_len - window_size)
+            end = start + window_size
+            forecast_mask = torch.full((forecast_len,), float("nan"))
+            forecast_mask[start:end] = 1
+            print(anom_forecast * forecast_mask)
+            return {
+                "vegetation_history": anom_hist,
+                "weather_history": weather_hist,
+                "vegetation_forecast": anom_forecast * forecast_mask,
+                "weather_forecast": weather_forecast * forecast_mask,
+                "msc": msc,
+                "location": self.locations[sample_id],
+            }
+        except Exception as e:
+            # logging.warning(f"Skipping {(sample_id, year)}: {e}")
+            return None
+
+
+class ForecastingAnomValDataset(ForecastingAnomTrainDataset):
+
+    def __getitem__(self, idx):
+        sample_id, year = self.training_pairs[idx]
+        try:
+            sample = self.samples[sample_id]
+            past_years = list(range(year - self.memory_length, year))
+            anom_hist = torch.cat([sample[y][0] for y in past_years], dim=0)
+            weather_hist = torch.cat([sample[y][1] for y in past_years], dim=0)
+            anom_forecast, weather_forecast = sample[year]
+            msc = self.msc[sample_id]
+            self._validate_tensors(anom_hist, anom_forecast, weather_forecast)
             return {
                 "vegetation_history": anom_hist,
                 "weather_history": weather_hist,
                 "vegetation_forecast": anom_forecast,
                 "weather_forecast": weather_forecast,
+                "msc": msc,
                 "location": self.locations[sample_id],
             }
         except Exception as e:

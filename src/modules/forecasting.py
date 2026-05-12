@@ -62,10 +62,26 @@ class ForecastingModule(LightningModule):
             return None
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
+        print(y_true)
 
         mask = ~torch.isnan(y_true)
-
+        y_pred, y_true = y_pred[mask], y_true[mask]
+        mask = torch.rand_like(y_true) < 0.2
         loss = self.loss_fn(y_pred[mask], y_true[mask])
+        print(loss)
+
+        # loss_daily = self.loss_fn(y_pred[mask], y_true[mask])
+        #
+        # pred_monthly = F.adaptive_avg_pool1d(y_pred.transpose(1, 2), 12).transpose(1, 2)
+        #
+        # target_monthly = F.adaptive_avg_pool1d(y_true.transpose(1, 2), 12).transpose(
+        #     1, 2
+        # )
+        # loss_monthly = self.loss_fn(pred_monthly, target_monthly)
+        #
+        # loss_seasonal = self.loss_fn(y_pred.mean(dim=1), y_true.mean(dim=1))
+        #
+        # loss = 0.5 * loss_daily + 0.3 * loss_monthly + 0.2 * loss_seasonal
 
         self.log(
             "train_loss",
