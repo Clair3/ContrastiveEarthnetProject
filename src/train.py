@@ -206,6 +206,7 @@ class ForecastingExperiment(BaseExperiment):
 
     def build_datamodule(self):
         self.data_config["forecasting"]["memory_length"] = self.config.memory_length
+        self.data_config["forecasting"]["start_doy"] = self.config.start_doy
         return ForecastingDataModule(
             data_config=self.data_config,
             batch_size=self.config.batch_size,

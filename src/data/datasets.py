@@ -95,7 +95,7 @@ class BaseDataset(Dataset):
         if msc.size == 366:
             msc = msc.drop_isel(dayofyear=59)  # leap year
         msc_arr = torch.as_tensor(
-            msc.values * 5,
+            msc.values,
             dtype=torch.float32,
         ).unsqueeze(-1)
         return msc_arr
@@ -416,7 +416,7 @@ class ForecastingAnomTrainDataset(BaseDataset):
             # start = random.randint(0, forecast_len - window_size)
             # end = start + window_size
             # forecast_mask = torch.full((forecast_len,), float("nan"))
-            # forecast_mask[start:end] = 1
+            # forecast_mask[0:90] = 1
             return {
                 "vegetation_history": anom_hist,
                 "weather_history": weather_hist,

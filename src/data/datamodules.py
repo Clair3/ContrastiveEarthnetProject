@@ -99,6 +99,7 @@ class ForecastingDataModule(ContrastiveDataModule):
         self.thresholds_path = data_config["thresholds_path"]
         self.percentiles_path = data_config["percentiles_path"]
         self.memory_length = data_config["forecasting"]["memory_length"]
+        self.start_doy = data_config["forecasting"]["start_doy"]
 
     def setup(self, stage=None):
         self.train_dataset = self._build_train_dataset(years=self.train_years)
@@ -112,16 +113,17 @@ class ForecastingDataModule(ContrastiveDataModule):
             era5_vars=self.era5_vars,
             years=years,
             memory_length=self.memory_length,
+            start_doy=self.start_doy,
         )
 
     def _build_val_dataset(self, years):
         return ForecastingAnomValDataset(
             dataset_path=self.dataset_path,
-            # percentiles_path=self.percentiles_path,
             sentinel2_vars=self.sentinel2_vars,
             era5_vars=self.era5_vars,
             years=years,
             memory_length=self.memory_length,
+            start_doy=self.start_doy,
         )
 
 

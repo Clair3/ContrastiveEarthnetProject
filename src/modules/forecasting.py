@@ -162,12 +162,6 @@ class ForecastingModule(LightningModule):
                 "mask": mask.detach().cpu(),
                 "year": batch["year"].cpu() if "year" in batch else None,
                 "sample_id": batch["sample_id"].cpu() if "sample_id" in batch else None,
-                # "location": (
-                #     [x.detach().cpu() for x in batch["location"]]
-                #     if "location" in batch
-                #     else None
-                # ),
-                # "time": batch["time"].detach().cpu() if "time" in batch else None,
             }
         )
         return loss
