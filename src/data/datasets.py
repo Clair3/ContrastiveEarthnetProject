@@ -116,7 +116,7 @@ class BaseDataset(Dataset):
             dtype=torch.float32,
         )
 
-        return veg_arr, weather_arr
+        return veg_arr, weather_arr 
 
     def _compute_max_evi(self, veg_arr):
         nan_mask = torch.isnan(veg_arr)
@@ -366,7 +366,7 @@ class ForecastingAnomTrainDataset(BaseDataset):
             dataset_path,
             sentinel2_vars,
             era5_vars,
-            years=list(range(years[0] - memory_length, years[-1] + 1)),
+            years=list(range(years[0] - memory_length, years[-1] + 1 + 1)),
             start_doy=start_doy,
         )
         self.memory_length = memory_length
@@ -412,7 +412,7 @@ class ForecastingAnomTrainDataset(BaseDataset):
             self._validate_tensors(anom_hist, anom_forecast, weather_forecast)
 
             # forecast_len = anom_forecast.shape[0]
-            # window_size = random.randint(30, 180)
+            #window_size = random.randint(30, 180)
             # start = random.randint(0, forecast_len - window_size)
             # end = start + window_size
             # forecast_mask = torch.full((forecast_len,), float("nan"))
@@ -422,9 +422,7 @@ class ForecastingAnomTrainDataset(BaseDataset):
                 "weather_history": weather_hist,
                 "vegetation_forecast": anom_forecast,  # * forecast_mask,
                 "weather_forecast": weather_forecast,  # * forecast_mask,
-                "msc": msc,
-                "location": self.locations[sample_id],
-            }
+                "msc": msc,            }
         except Exception as e:
             # logging.warning(f"Skipping {(sample_id, year)}: {e}")
             return None
@@ -445,8 +443,8 @@ class ForecastingAnomValDataset(ForecastingAnomTrainDataset):
             return {
                 "vegetation_history": anom_hist,
                 "weather_history": weather_hist,
-                "vegetation_forecast": anom_forecast,
-                "weather_forecast": weather_forecast,
+                "vegetation_forecast": anom_forecast,  
+                "weather_forecast": weather_forecast, 
                 "msc": msc,
                 # "location": self.locations[sample_id],
                 "sample_id": sample_id,

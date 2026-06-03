@@ -445,7 +445,13 @@ if __name__ == "__main__":
         "--profile_resources",
         action="store_true",
         help="Run a single batch for resource estimation",
-    )  # "store_true" means this flag is False by default and becomes True if --profile isincluded in the command line
+    ) 
+
+    parser.add_argument(
+        "--pretrained_weights",
+        action="store_true",
+        help="Run a single batch for resource estimation",
+    ) 
 
     args = parser.parse_args()
 
