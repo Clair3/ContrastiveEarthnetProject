@@ -194,9 +194,21 @@ class TransformerBaseline(nn.Module):
 
         if pretrained_encoders is not None:
             print("Using pretrained encoders for forecasting...")
+            # ckpt_path = CHECKPOINT_DIR / run_name / "best.ckpt"
+            # model = self.build_model()
+            # ckpt = torch.load(ckpt_path, map_location="cpu")
+            # model.load_state_dict(ckpt["state_dict"])
             self.veg_encoder = pretrained_encoders["veg"]
             self.weather_encoder = pretrained_encoders["weather"]
             self.weather_query_encoder = copy.deepcopy(pretrained_encoders["weather"])
+            # for param in self.veg_encoder.parameters():
+            #     param.requires_grad = False
+            #
+            # for param in self.weather_encoder.parameters():
+            #     param.requires_grad = False
+            #
+            # for param in self.weather_query_encoder.parameters():
+            #     param.requires_grad = False
             print("Loaded pretrained encoders for forecasting.")
 
         else:

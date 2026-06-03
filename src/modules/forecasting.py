@@ -62,15 +62,12 @@ class ForecastingModule(LightningModule):
             return None
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
-        print(y_true)
 
         mask = ~torch.isnan(y_true)
         y_pred, y_true = y_pred[mask], y_true[mask]
         mask = torch.rand_like(y_true) < 0.2
-        loss = self.loss_fn(y_pred[mask], y_true[mask])
-        print(loss)
-
-        # loss_daily = self.loss_fn(y_pred[mask], y_true[mask])
+        # loss = self.loss_fn(y_pred[mask], y_true[mask])
+        loss = self.loss_fn(y_pred, y_true)
         #
         # pred_monthly = F.adaptive_avg_pool1d(y_pred.transpose(1, 2), 12).transpose(1, 2)
         #
@@ -163,11 +160,13 @@ class ForecastingModule(LightningModule):
                 "preds": y_pred.detach().cpu(),
                 "targets": y_true.detach().cpu(),
                 "mask": mask.detach().cpu(),
-                "location": (
-                    [x.detach().cpu() for x in batch["location"]]
-                    if "location" in batch
-                    else None
-                ),
+                "year": batch["year"].cpu() if "year" in batch else None,
+                "sample_id": batch["sample_id"].cpu() if "sample_id" in batch else None,
+                # "location": (
+                #     [x.detach().cpu() for x in batch["location"]]
+                #     if "location" in batch
+                #     else None
+                # ),
                 # "time": batch["time"].detach().cpu() if "time" in batch else None,
             }
         )
@@ -178,55 +177,143 @@ class ForecastingModule(LightningModule):
         targets = torch.cat([x["targets"] for x in self.test_outputs])
         masks = torch.cat([x["mask"] for x in self.test_outputs])
 
-        ds_kwargs = {
-            "data_vars": {
-                "predictions": (
-                    ("sample", "time"),
-                    predictions.squeeze(-1).cpu().numpy(),
-                ),
-                "targets": (("sample", "time"), targets.squeeze(-1).cpu().numpy()),
-                "masks": (("sample", "time"), masks.squeeze(-1).cpu().numpy()),
-            }
-        }
+        years = torch.cat([x["year"] for x in self.test_outputs]).numpy()
+        sample_ids = torch.cat([x["sample_id"] for x in self.test_outputs]).numpy()
 
-        if self.test_outputs[0]["location"] is not None:
-            lats = torch.cat([x["location"][0] for x in self.test_outputs])
-            lons = torch.cat([x["location"][1] for x in self.test_outputs])
-            locations = torch.stack([lons, lats], dim=1)
-            ds_kwargs["coords"] = {
-                "longitude": ("sample", locations[:, 0].cpu().numpy()),
-                "latitude": ("sample", locations[:, 1].cpu().numpy()),
-                # "time":
-            }
-            # time_array = self.test_outputs[0]["time"].cpu().numpy().astype("datetime64[s]")
+        dataset = self.trainer.datamodule.test_dataset
 
-        ds = xr.Dataset(**ds_kwargs)
-        # Zarr path
-        try:
-            pred_path = os.path.join(
-                self.config.output_dir, f"{self.logger.experiment.id}.zarr"
+        unique_years = np.unique(years)
+
+        for year in unique_years:
+
+            idx = years == year
+
+            preds_year = predictions[idx]
+            targets_year = targets[idx]
+            masks_year = masks[idx]
+
+            sample_ids_year = sample_ids[idx]
+
+            lats = np.array([dataset.locations[sid][0] for sid in sample_ids_year])
+
+            lons = np.array([dataset.locations[sid][1] for sid in sample_ids_year])
+
+            ds = xr.Dataset(
+                data_vars={
+                    "predictions": (
+                        ("sample", "time"),
+                        preds_year.squeeze(-1).numpy(),
+                    ),
+                    "targets": (
+                        ("sample", "time"),
+                        targets_year.squeeze(-1).numpy(),
+                    ),
+                    "masks": (
+                        ("sample", "time"),
+                        masks_year.squeeze(-1).numpy(),
+                    ),
+                },
+                coords={
+                    "time": dataset.year_times[int(year)],
+                    "latitude": ("sample", lats),
+                    "longitude": ("sample", lons),
+                    "sample_id": ("sample", sample_ids_year),
+                },
             )
-        except:
-            pred_path = os.path.join(self.config.output_dir, f"prediction.zarr")
 
-        print(f"Saving predictions to {pred_path}")
+            try:
+                pred_path = os.path.join(
+                    self.config.output_dir,
+                    f"{self.logger.experiment.id}_{int(year)}.zarr",
+                )
+            except Exception:
+                pred_path = os.path.join(
+                    self.config.output_dir,
+                    f"prediction_{int(year)}.zarr",
+                )
 
-        ds.to_zarr(
-            pred_path,
-            mode="w",
-            encoding={
-                "predictions": {"chunks": (1000, predictions.shape[1])},
-                "targets": {"chunks": (1000, targets.shape[1])},
-                "masks": {"chunks": (1000, masks.shape[1])},
-                "longitude": {"chunks": (1000,)},
-                "latitude": {"chunks": (1000,)},
-            },
-        )
+            print(f"Saving predictions to {pred_path}")
+
+            ds.to_zarr(
+                pred_path,
+                mode="w",
+                encoding={
+                    "predictions": {
+                        "chunks": (
+                            min(1000, preds_year.shape[0]),
+                            preds_year.shape[1],
+                        )
+                    },
+                    "targets": {
+                        "chunks": (
+                            min(1000, targets_year.shape[0]),
+                            targets_year.shape[1],
+                        )
+                    },
+                    "masks": {
+                        "chunks": (
+                            min(1000, masks_year.shape[0]),
+                            masks_year.shape[1],
+                        )
+                    },
+                },
+            )
 
         self.test_outputs.clear()
 
-    def configure_optimizers1(self):
-        return optim.Adam(self.model.parameters(), lr=float(self.config.lr))
+    # def on_test_epoch_end(self):
+    #     predictions = torch.cat([x["preds"] for x in self.test_outputs])
+    #     targets = torch.cat([x["targets"] for x in self.test_outputs])
+    #     masks = torch.cat([x["mask"] for x in self.test_outputs])
+    #     years = torch.cat([x["year"] for x in self.test_outputs])
+    #     sample_ids = torch.cat([x["sample_id"] for x in self.test_outputs]).numpy()
+    #
+    #     ds_kwargs = {
+    #         "data_vars": {
+    #             "predictions": (
+    #                 ("sample", "time"),
+    #                 predictions.squeeze(-1).cpu().numpy(),
+    #             ),
+    #             "targets": (("sample", "time"), targets.squeeze(-1).cpu().numpy()),
+    #             "masks": (("sample", "time"), masks.squeeze(-1).cpu().numpy()),
+    #         }
+    #     }
+    #
+    #     if self.test_outputs[0]["location"] is not None:
+    #         lats = torch.cat([x["location"][0] for x in self.test_outputs])
+    #         lons = torch.cat([x["location"][1] for x in self.test_outputs])
+    #         locations = torch.stack([lons, lats], dim=1)
+    #         ds_kwargs["coords"] = {
+    #             "longitude": ("sample", locations[:, 0].cpu().numpy()),
+    #             "latitude": ("sample", locations[:, 1].cpu().numpy()),
+    #             # "time":
+    #         }
+    #         # time_array = self.test_outputs[0]["time"].cpu().numpy().astype("datetime64[s]")
+    #
+    #     ds = xr.Dataset(**ds_kwargs)
+    #     # Zarr path
+    #     try:
+    #         pred_path = os.path.join(
+    #             self.config.output_dir, f"{self.logger.experiment.id}.zarr"
+    #         )
+    #     except:
+    #         pred_path = os.path.join(self.config.output_dir, f"prediction.zarr")
+    #
+    #     print(f"Saving predictions to {pred_path}")
+    #
+    #     ds.to_zarr(
+    #         pred_path,
+    #         mode="w",
+    #         encoding={
+    #             "predictions": {"chunks": (1000, predictions.shape[1])},
+    #             "targets": {"chunks": (1000, targets.shape[1])},
+    #             "masks": {"chunks": (1000, masks.shape[1])},
+    #             "longitude": {"chunks": (1000,)},
+    #             "latitude": {"chunks": (1000,)},
+    #         },
+    #     )
+    #
+    #     self.test_outputs.clear()
 
     def configure_optimizers(self):
         lr = float(self.config.lr)

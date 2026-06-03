@@ -108,15 +108,19 @@ class BaseExperiment:
         ckpt_path = trainer.checkpoint_callback.best_model_path
         trainer.test(model=None, datamodule=datamodule, ckpt_path=ckpt_path)
 
-    def eval(self, run_name):
+    def load_model(self, run_name):
         ckpt_path = CHECKPOINT_DIR / run_name / "best.ckpt"
-        datamodule = self.build_datamodule()
 
         model = self.build_model()
 
         ckpt = torch.load(ckpt_path, map_location="cpu")
 
         model.load_state_dict(ckpt["state_dict"])
+        return model
+
+    def eval(self, run_name):
+        datamodule = self.build_datamodule()
+        model = self.load_model(run_name)
 
         trainer = self.build_trainer(logger=False)
 
@@ -410,7 +414,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--train_config_file",
-        default="defaults/transformer_contrastive.yaml",  # _pretrain_forecast.yaml",
+        default="defaults/transformer_baseline.yaml",  # _pretrain_forecast.yaml",
         help="Path to training config file (relative to project/configs/)",
     )
     parser.add_argument(
@@ -432,7 +436,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--experiment_name",
-        default="time_agg_loss",
+        default="contrastive",
         help="name of the folder used to save the test set (outputs/predictions/dataset/model/experiment_name/time)",
     )
 
