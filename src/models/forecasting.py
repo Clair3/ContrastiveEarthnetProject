@@ -182,7 +182,7 @@ class LSTM(nn.Module):
 
 
 class TransformerBaseline(nn.Module):
-    def __init__(self, data_config, config, pretrained_encoders=None):
+    def __init__(self, data_config, config, pretrained_checkpoint=None):
         super().__init__()
         veg_dim = len(data_config["vegetation"]["variables"])  # + 1
         weather_dim = len(data_config["weather"]["variables"])
@@ -192,15 +192,69 @@ class TransformerBaseline(nn.Module):
 
         d_model = config.d_model
 
-        if pretrained_encoders is not None:
+        print(
+            f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
+        )
+        self.veg_encoder = TimeSeriesTransformerEncoder(
+            input_dim=veg_dim + 1,
+            sequence_length=T_veg * memory_length,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=config.use_cls,
+            seasonal_positional_encoding=config.seasonal_positional_encoding,
+        )
+        self.weather_encoder = TimeSeriesTransformerEncoder(
+            input_dim=weather_dim,
+            sequence_length=T_weather * memory_length,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=config.use_cls,
+            seasonal_positional_encoding=config.seasonal_positional_encoding,
+        )
+        self.weather_forecast_encoder = TimeSeriesTransformerEncoder(
+            input_dim=weather_dim,
+            sequence_length=T_weather,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=config.use_cls,
+            seasonal_positional_encoding=config.seasonal_positional_encoding,
+        )
+
+        if pretrained_checkpoint is not None:
+            self.load_pretrained(pretrained_checkpoint)
+
+        if pretrained_checkpoint is not None:
             print("Using pretrained encoders for forecasting...")
+            ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
+
+            state_dict = ckpt["state_dict"]
+
+            # self.veg_encoder.load_state_dict(
+            #     extract_encoder_weights(
+            #         state_dict,
+            #         "encoder_veg"
+            #     )
+            # )
+# 
+            # self.weather_encoder.load_state_dict(
+            #     extract_encoder_weights(
+            #         state_dict,
+            #         "encoder_weather"
+            #     )
+            # )
             # ckpt_path = CHECKPOINT_DIR / run_name / "best.ckpt"
             # model = self.build_model()
             # ckpt = torch.load(ckpt_path, map_location="cpu")
             # model.load_state_dict(ckpt["state_dict"])
-            self.veg_encoder = pretrained_encoders["veg"]
-            self.weather_encoder = pretrained_encoders["weather"]
-            self.weather_query_encoder = copy.deepcopy(pretrained_encoders["weather"])
+            # self.veg_encoder = pretrained_encoders["veg"]
+            # self.weather_encoder = pretrained_encoders["weather"]
+            # self.weather_query_encoder = copy.deepcopy(pretrained_encoders["weather"])
             # for param in self.veg_encoder.parameters():
             #     param.requires_grad = False
             #
@@ -211,42 +265,6 @@ class TransformerBaseline(nn.Module):
             #     param.requires_grad = False
             print("Loaded pretrained encoders for forecasting.")
 
-        else:
-            print(
-                f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
-            )
-            self.veg_encoder = TimeSeriesTransformerEncoder(
-                input_dim=veg_dim + 1,
-                sequence_length=T_veg * memory_length,
-                d_model=d_model,
-                num_heads=config.num_heads,
-                num_layers=config.num_layers,
-                dropout=config.dropout,
-                use_cls=config.use_cls,
-                seasonal_positional_encoding=config.seasonal_positional_encoding,
-            )
-
-            self.weather_encoder = TimeSeriesTransformerEncoder(
-                input_dim=weather_dim,
-                sequence_length=T_weather * memory_length,
-                d_model=d_model,
-                num_heads=config.num_heads,
-                num_layers=config.num_layers,
-                dropout=config.dropout,
-                use_cls=config.use_cls,
-                seasonal_positional_encoding=config.seasonal_positional_encoding,
-            )
-
-            self.weather_forecast_encoder = TimeSeriesTransformerEncoder(
-                input_dim=weather_dim,
-                sequence_length=T_weather,
-                d_model=d_model,
-                num_heads=config.num_heads,
-                num_layers=config.num_layers,
-                dropout=config.dropout,
-                use_cls=config.use_cls,
-                seasonal_positional_encoding=config.seasonal_positional_encoding,
-            )
 
         # --- Decoder: weather_forecast attends to past context ---
         decoder_layer = nn.TransformerDecoderLayer(

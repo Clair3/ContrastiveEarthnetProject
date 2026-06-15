@@ -1,4 +1,5 @@
 from os import times
+from weakref import ref
 
 from matplotlib.pylab import sample
 import xarray as xr
@@ -57,21 +58,27 @@ class BaseDataset(Dataset):
     def _create_training_pairs(self, years):
         """Create list of (idx_sample, year) pairs."""
         self.training_pairs = [
-            (idx_sample, year)
+            (idx_sample, year, doy)
             for idx_sample in range(self.num_samples)
             for year in years
+            for doy in range(1, 366)
         ]
 
     def _precompute_year_indices(self, start_doy=1):
         """Pre-compute which time indices belong to each year."""
 
-        def _get_custom_year(times, start_doy=120):
+        def _get_custom_year(times, start_doy):
+            ref = pd.Timestamp("2001-01-01") + pd.Timedelta(days=start_doy - 1)
+            start_month = ref.month
+            start_day = ref.day
+
             dt = pd.DatetimeIndex(times)
 
-            years = dt.year
-            doy = dt.dayofyear
+            before_start = (dt.month < start_month) | (
+                (dt.month == start_month) & (dt.day < start_day)
+            )
 
-            return np.where(doy < start_doy, years - 1, years)
+            return np.where(before_start, dt.year - 1, dt.year)
 
         #   Vegetation
         # Extract year for each timestamp
@@ -116,7 +123,7 @@ class BaseDataset(Dataset):
             dtype=torch.float32,
         )
 
-        return veg_arr, weather_arr 
+        return veg_arr, weather_arr
 
     def _compute_max_evi(self, veg_arr):
         nan_mask = torch.isnan(veg_arr)
@@ -135,14 +142,6 @@ class BaseDataset(Dataset):
                 "No precipitation variable found in era5_vars. Must include either 'tp_max' or 'P'."
             )
         return torch.sum(weather_arr[:, precip_idx])
-
-    def _get_msc(self, sample):
-        msc = sample["msc"]
-        msc_arr = torch.as_tensor(
-            msc,
-            dtype=torch.float32,
-        )
-        return msc_arr
 
     def _preload_sample(self, sample_id, years):
         """Precompute tensors for all years of a given sample."""
@@ -322,7 +321,7 @@ class ForecastingValDataset(BaseDataset):
             #     veg_hist, weather_hist = sample[year - 1]
             veg_forecast, weather_forecast = sample[year]
 
-            msc = self._get_msc(sample)
+            msc = self.msc(sample)
             max_evi = self._compute_max_evi(veg_forecast)
             sum_precip = self._compute_sum_precip(weather_forecast)
 
@@ -369,6 +368,7 @@ class ForecastingAnomTrainDataset(BaseDataset):
             years=list(range(years[0] - memory_length, years[-1] + 1 + 1)),
             start_doy=start_doy,
         )
+        print("training years:", years)
         self.memory_length = memory_length
         self._create_training_pairs(years=years)
         self.msc = [self._preload_msc(i) for i in range(self.num_samples)]
@@ -412,7 +412,7 @@ class ForecastingAnomTrainDataset(BaseDataset):
             self._validate_tensors(anom_hist, anom_forecast, weather_forecast)
 
             # forecast_len = anom_forecast.shape[0]
-            #window_size = random.randint(30, 180)
+            # window_size = random.randint(30, 180)
             # start = random.randint(0, forecast_len - window_size)
             # end = start + window_size
             # forecast_mask = torch.full((forecast_len,), float("nan"))
@@ -422,7 +422,8 @@ class ForecastingAnomTrainDataset(BaseDataset):
                 "weather_history": weather_hist,
                 "vegetation_forecast": anom_forecast,  # * forecast_mask,
                 "weather_forecast": weather_forecast,  # * forecast_mask,
-                "msc": msc,            }
+                "msc": msc,
+            }
         except Exception as e:
             # logging.warning(f"Skipping {(sample_id, year)}: {e}")
             return None
@@ -443,8 +444,8 @@ class ForecastingAnomValDataset(ForecastingAnomTrainDataset):
             return {
                 "vegetation_history": anom_hist,
                 "weather_history": weather_hist,
-                "vegetation_forecast": anom_forecast,  
-                "weather_forecast": weather_forecast, 
+                "vegetation_forecast": anom_forecast,
+                "weather_forecast": weather_forecast,
                 "msc": msc,
                 # "location": self.locations[sample_id],
                 "sample_id": sample_id,

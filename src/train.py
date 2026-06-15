@@ -108,19 +108,16 @@ class BaseExperiment:
         ckpt_path = trainer.checkpoint_callback.best_model_path
         trainer.test(model=None, datamodule=datamodule, ckpt_path=ckpt_path)
 
-    def load_model(self, run_name):
+    def load_model(self, model, run_name):
         ckpt_path = CHECKPOINT_DIR / run_name / "best.ckpt"
-
-        model = self.build_model()
-
         ckpt = torch.load(ckpt_path, map_location="cpu")
-
         model.load_state_dict(ckpt["state_dict"])
         return model
 
     def eval(self, run_name):
         datamodule = self.build_datamodule()
-        model = self.load_model(run_name)
+        model = self.build_model()
+        model = self.load_model(model, run_name)
 
         trainer = self.build_trainer(logger=False)
 
@@ -214,19 +211,19 @@ class ForecastingExperiment(BaseExperiment):
         )
 
     def build_model(self):
-        if self.config.model_name == "TransformerBaseline":
-            encoders = getattr(self, "pretrained_encoders", None)
-
-            self.model = ModelClass[self.config.model_name](
-                data_config=self.data_config,
-                config=self.config,
-                pretrained_encoders=encoders,
-            )
-        else:
-            self.model = ModelClass[self.config.model_name](
-                data_config=self.data_config,
-                config=self.config,
-            )
+        # if self.config.model_name == "TransformerBaseline":
+        #
+        #     self.model = ModelClass[self.config.model_name](
+        #         data_config=self.data_config,
+        #         config=self.config,
+        #     )
+        #     pretrained_checkpoint = getattr(self, "pretrained_checkpoint", None)
+        #     self.model= self.load_model(self.model, run_name)
+        # else:
+        self.model = ModelClass[self.config.model_name](
+            data_config=self.data_config,
+            config=self.config,
+        )
 
         forecasting_module = ForecastingModule(
             model=self.model,
@@ -445,13 +442,7 @@ if __name__ == "__main__":
         "--profile_resources",
         action="store_true",
         help="Run a single batch for resource estimation",
-    ) 
-
-    parser.add_argument(
-        "--pretrained_weights",
-        action="store_true",
-        help="Run a single batch for resource estimation",
-    ) 
+    )
 
     args = parser.parse_args()
 
