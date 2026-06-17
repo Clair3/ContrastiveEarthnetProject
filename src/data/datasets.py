@@ -13,6 +13,122 @@ import random
 
 
 class BaseDataset(Dataset):
+
+    def __init__(
+        self,
+        dataset_path,
+        vegetation_indices,
+        weather_vars,
+        years,
+        context_length,
+        prediction_length,
+    ):
+        self.dataset = self.dataset_split(
+            dataset_path=dataset_path,
+            years=years,
+        )
+
+        self.vegetation_indices = vegetation_indices
+        self.weather_vars = weather_vars
+
+        self.context_length = context_length
+        self.prediction_length = prediction_length
+        self.num_samples = len(self.dataset.sample)
+        self.stride = 32
+
+        self._create_training_pairs()
+        self._preload_data()
+        self.locations = {
+            sample_id: (
+                float(self.dataset.latitude.values[sample_id]),
+                float(self.dataset.longitude.values[sample_id]),
+            )
+            for sample_id in range(self.num_samples)
+        }
+
+    def dataset_split(self, dataset_path: str, years: list[int]) -> xr.Dataset:
+        """
+        Create a dataset split containing only data from specified years.
+
+        Args:
+            dataset: Input dataset with time_veg and time_weather dimensions
+            years: List of years to include in this split
+
+        Returns:
+            Dataset filtered to only include samples from the specified years
+        """
+        print(f"Loading dataset from {dataset_path} and filtering for years {years}")
+        dataset = xr.open_zarr(dataset_path)
+        return dataset.sel(
+            time_veg=pd.DatetimeIndex(dataset.time_veg.values).year.isin(years),
+            time_weather=pd.DatetimeIndex(dataset.time_weather.values).year.isin(years),
+        ).load()
+
+    def _preload_data(self):
+
+        self.vegetation = []
+        self.weather = []
+
+        for sample_id in range(self.num_samples):
+
+            sample = self.dataset.isel(sample=sample_id)
+
+            veg = torch.as_tensor(
+                np.stack(
+                    [sample[var].values for var in self.vegetation_indices],
+                    axis=1,
+                ),
+                dtype=torch.float32,
+            )
+
+            weather = torch.as_tensor(
+                np.stack(
+                    [sample[var].values for var in self.weather_vars],
+                    axis=1,
+                ),
+                dtype=torch.float32,
+            )
+
+            self.vegetation.append(veg)
+            self.weather.append(weather)
+
+    def _create_training_pairs(self):
+
+        n_time = len(self.dataset.time_veg)
+
+        origins = range(
+            self.context_length,
+            n_time - self.prediction_length + 1,
+            self.stride,
+        )
+        self.training_pairs = [
+            (sample_id, t0) for sample_id in range(self.num_samples) for t0 in origins
+        ]
+
+        print(
+            f"n_time={n_time}, "
+            f"context={self.context_length}, "
+            f"prediction={self.prediction_length}"
+        )
+
+        print(
+            f"num_samples={self.num_samples}, "
+            f"num_windows={len(self.training_pairs)}"
+        )
+
+    def __len__(self):
+        return len(self.training_pairs)
+
+    def _validate_tensors(self, *tensors):
+        for t in tensors:
+            if torch.isnan(t).all() or torch.isinf(t).any():
+                raise ValueError("Tensor contains only NaNs or infs")
+
+    # def __len__(self):
+    #     return self.num_samples * self.n_windows
+
+
+class BaseDataset2(Dataset):
     """
     BaseDataset for Sentinel-2 + ERA5 time series.
     Preloads entire dataset into RAM as PyTorch tensors.
@@ -21,8 +137,8 @@ class BaseDataset(Dataset):
     def __init__(
         self,
         dataset_path: str,
-        sentinel2_vars: list,
-        era5_vars: list,
+        vegetation_indices: list,
+        weather_vars: list,
         years=list[int],
         start_doy=1,
     ):
@@ -31,8 +147,8 @@ class BaseDataset(Dataset):
         print(
             f"Dataset loaded with {self.num_samples} samples. years: {[i for i in years]}"
         )
-        self.sentinel2_vars = sentinel2_vars
-        self.era5_vars = era5_vars
+        self.vegetation_indices = vegetation_indices
+        self.weather_vars = weather_vars
 
         # Pre-compute year masks once during init
         self._precompute_year_indices(start_doy=start_doy)
@@ -112,13 +228,13 @@ class BaseDataset(Dataset):
         weather_idx = self.weather_year_masks[year]
         veg_arr = torch.as_tensor(
             np.stack(
-                [sample[var].values[veg_idx] for var in self.sentinel2_vars], axis=1
+                [sample[var].values[veg_idx] for var in self.vegetation_indices], axis=1
             ),
             dtype=torch.float32,
         )
         weather_arr = torch.as_tensor(
             np.stack(
-                [sample[var].values[weather_idx] for var in self.era5_vars], axis=1
+                [sample[var].values[weather_idx] for var in self.weather_vars], axis=1
             ),
             dtype=torch.float32,
         )
@@ -133,13 +249,13 @@ class BaseDataset(Dataset):
 
     def _compute_sum_precip(self, weather_arr):
         # precipitation is either "tp_max" or "P"
-        if "tp_max" in self.era5_vars:
-            precip_idx = self.era5_vars.index("tp_max")
-        elif "P" in self.era5_vars:
-            precip_idx = self.era5_vars.index("P")
+        if "tp_max" in self.weather_vars:
+            precip_idx = self.weather_vars.index("tp_max")
+        elif "P" in self.weather_vars:
+            precip_idx = self.weather_vars.index("P")
         else:
             raise ValueError(
-                "No precipitation variable found in era5_vars. Must include either 'tp_max' or 'P'."
+                "No precipitation variable found in weather_vars. Must include either 'tp_max' or 'P'."
             )
         return torch.sum(weather_arr[:, precip_idx])
 
@@ -164,9 +280,9 @@ class BaseDataset(Dataset):
 
 class ContrastiveDataset(BaseDataset):
 
-    def __init__(self, dataset_path, sentinel2_vars, era5_vars, years):
+    def __init__(self, dataset_path, vegetation_indices, weather_vars, years):
 
-        super().__init__(dataset_path, sentinel2_vars, era5_vars, years)
+        super().__init__(dataset_path, vegetation_indices, weather_vars, years)
         self._create_training_pairs(years=years)
         self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
 
@@ -197,15 +313,15 @@ class ForecastingTrainDataset(BaseDataset):
     def __init__(
         self,
         dataset_path,
-        sentinel2_vars,
-        era5_vars,
+        vegetation_indices,
+        weather_vars,
         years,
         memory_length,
     ):
         super().__init__(
             dataset_path,
-            sentinel2_vars,
-            era5_vars,
+            vegetation_indices,
+            weather_vars,
             years=list(range(years[0] - memory_length, years[-1] + 1)),
         )
         self.memory_length = memory_length
@@ -243,15 +359,15 @@ class ForecastingValDataset(BaseDataset):
         self,
         dataset_path,
         percentiles_path,
-        sentinel2_vars,
-        era5_vars,
+        vegetation_indices,
+        weather_vars,
         years,
         memory_length,
     ):
         super().__init__(
             dataset_path,
-            sentinel2_vars,
-            era5_vars,
+            vegetation_indices,
+            weather_vars,
             years=list(range(years[0] - memory_length, years[-1] + 1)),
         )
 
@@ -352,19 +468,107 @@ class ForecastingValDataset(BaseDataset):
 
 class ForecastingAnomTrainDataset(BaseDataset):
 
+    def __getitem__(self, idx):
+        try:
+            sample_id, t0 = self.training_pairs[idx]
+
+            veg = self.vegetation[sample_id]
+            weather = self.weather[sample_id]
+
+            hist_slice = slice(
+                t0 - self.context_length,
+                t0,
+            )
+
+            forecast_slice = slice(
+                t0,
+                t0 + self.prediction_length,
+            )
+
+            vegetation_history = veg[hist_slice]
+            weather_history = weather[hist_slice]
+
+            vegetation_forecast = veg[forecast_slice]
+            weather_forecast = weather[forecast_slice]
+
+            self._validate_tensors(
+                vegetation_history, vegetation_forecast, weather_forecast
+            )
+
+            # msc = self.msc[sample_id]
+
+            return {
+                "vegetation_history": vegetation_history,
+                "weather_history": weather_history,
+                "vegetation_forecast": vegetation_forecast,
+                "weather_forecast": weather_forecast,
+                # "msc": msc,
+            }
+        except Exception as e:
+            # logging.warning(f"Skipping {(sample_id, year)}: {e}")
+            return None
+
+
+class ForecastingAnomValDataset(BaseDataset):
+
+    def __getitem__(self, idx):
+        try:
+            sample_id, t0 = self.training_pairs[idx]
+
+            veg = self.vegetation[sample_id]
+            weather = self.weather[sample_id]
+
+            hist_slice = slice(
+                t0 - self.context_length,
+                t0,
+            )
+
+            forecast_slice = slice(
+                t0,
+                t0 + self.prediction_length,
+            )
+
+            vegetation_history = veg[hist_slice]
+            weather_history = weather[hist_slice]
+
+            vegetation_forecast = veg[forecast_slice]
+            weather_forecast = weather[forecast_slice]
+            self._validate_tensors(
+                vegetation_history, vegetation_forecast, weather_forecast
+            )
+
+            # msc = self.msc[sample_id]
+
+            return {
+                "vegetation_history": vegetation_history,
+                "weather_history": weather_history,
+                "vegetation_forecast": vegetation_forecast,
+                "weather_forecast": weather_forecast,
+                # "msc": msc,
+                "sample_id": torch.tensor(sample_id),
+                "forecast_origin": torch.tensor(t0),
+                "location": self.locations[sample_id],
+            }
+        except Exception as e:
+            # logging.warning(f"Skipping {(sample_id, year)}: {e}")
+            return None
+
+
+class ForecastingAnomTrainDataset_old(BaseDataset):
+
     def __init__(
         self,
         dataset_path,
-        sentinel2_vars,
-        era5_vars,
+        vegetation_indices,
+        weather_vars,
         years,
         memory_length,
         start_doy=1,
     ):
         super().__init__(
             dataset_path,
-            sentinel2_vars,
-            era5_vars,
+            vegetation_indices,
+            weather_vars,
             years=list(range(years[0] - memory_length, years[-1] + 1 + 1)),
             start_doy=start_doy,
         )
@@ -429,7 +633,7 @@ class ForecastingAnomTrainDataset(BaseDataset):
             return None
 
 
-class ForecastingAnomValDataset(ForecastingAnomTrainDataset):
+class ForecastingAnomValDataset_old(ForecastingAnomTrainDataset_old):
 
     def __getitem__(self, idx):
         sample_id, year = self.training_pairs[idx]

@@ -81,6 +81,7 @@ class BaseExperiment:
             max_epochs=self.config.max_epochs,
             accelerator="gpu",
             devices=self.config.gpu_device,
+            val_check_interval=0.1,
             precision="16-mixed",
             logger=logger,
             callbacks=self.build_callbacks(wandb.run.id) if wandb.run else None,
@@ -202,9 +203,9 @@ class ContrastiveExperiment(BaseExperiment):
 class ForecastingExperiment(BaseExperiment):
 
     def build_datamodule(self):
-        self.data_config["forecasting"]["memory_length"] = self.config.memory_length
-        self.data_config["forecasting"]["start_doy"] = self.config.start_doy
         return ForecastingDataModule(
+            context_length=self.config.context_length,
+            prediction_length=self.config.prediction_length,
             data_config=self.data_config,
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
@@ -388,7 +389,7 @@ def run_pipeline(
         base_output_dir
         / experiment_name
         / Path(str(datetime.now().strftime("%Y-%m-%d_%H-%M-%S")))
-        / str(data_config["forecasting"]["test"][-1])
+        # / str(data_config["forecasting"]["test"][-1])
     )
     os.makedirs(train_config["output_dir"], exist_ok=True)
 
@@ -434,7 +435,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--experiment_name",
-        default="contrastive",
+        default="new",
         help="name of the folder used to save the test set (outputs/predictions/dataset/model/experiment_name/time)",
     )
 

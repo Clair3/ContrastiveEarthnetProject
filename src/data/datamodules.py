@@ -33,8 +33,8 @@ class ContrastiveDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.dataset_path = Path(data_config["path"])
-        self.sentinel2_vars = data_config["vegetation"]["variables"]
-        self.era5_vars = data_config["weather"]["variables"]
+        self.vegetation_indices = data_config["vegetation"]["variables"]
+        self.weather_vars = data_config["weather"]["variables"]
 
         self.train_years = data_config["contrastive"]["train"]
         self.val_years = data_config["contrastive"]["validation"]
@@ -45,8 +45,8 @@ class ContrastiveDataModule(LightningDataModule):
     def _build_dataset(self, years):
         return ContrastiveDataset(
             dataset_path=self.dataset_path,
-            sentinel2_vars=self.sentinel2_vars,
-            era5_vars=self.era5_vars,
+            vegetation_indices=self.vegetation_indices,
+            weather_vars=self.weather_vars,
             years=years,
         )
 
@@ -55,14 +55,14 @@ class ContrastiveDataModule(LightningDataModule):
         self.val_dataset = self._build_dataset(years=self.val_years)
         self.test_dataset = self._build_dataset(years=self.test_years)
 
-    def _build_dataloader(self, dataset, shuffle=False):
+    def _build_dataloader(self, dataset, shuffle=True):
 
         if self.batch_sampler:
             return DataLoader(
                 dataset,
                 batch_sampler=BatchSampler(
                     dataset=dataset,
-                    shuffle=True,
+                    shuffle=shuffle,
                 ),
                 num_workers=self.num_workers,
                 collate_fn=safe_collate,
@@ -84,22 +84,30 @@ class ContrastiveDataModule(LightningDataModule):
         return self._build_dataloader(self.train_dataset, shuffle=True)
 
     def val_dataloader(self):
-        return self._build_dataloader(self.val_dataset)
+        return self._build_dataloader(self.val_dataset, shuffle=False)
 
     def test_dataloader(self):
-        return self._build_dataloader(self.test_dataset)
+        return self._build_dataloader(self.test_dataset, shuffle=False)
 
 
 class ForecastingDataModule(ContrastiveDataModule):
-    def __init__(self, data_config, batch_size=16, num_workers=16):
+    def __init__(
+        self,
+        context_length,
+        prediction_length,
+        data_config,
+        batch_size=16,
+        num_workers=16,
+    ):
         super().__init__(data_config, batch_size, num_workers)
+        self.context_length = context_length
+        self.prediction_length = prediction_length
+
         self.train_years = data_config["forecasting"]["train"]
         self.val_years = data_config["forecasting"]["validation"]
         self.test_years = data_config["forecasting"]["test"]
         self.thresholds_path = data_config["thresholds_path"]
         self.percentiles_path = data_config["percentiles_path"]
-        self.memory_length = data_config["forecasting"]["memory_length"]
-        self.start_doy = data_config["forecasting"]["start_doy"]
 
     def setup(self, stage=None):
         self.train_dataset = self._build_train_dataset(years=self.train_years)
@@ -109,21 +117,21 @@ class ForecastingDataModule(ContrastiveDataModule):
     def _build_train_dataset(self, years):
         return ForecastingAnomTrainDataset(
             dataset_path=self.dataset_path,
-            sentinel2_vars=self.sentinel2_vars,
-            era5_vars=self.era5_vars,
+            vegetation_indices=self.vegetation_indices,
+            weather_vars=self.weather_vars,
             years=years,
-            memory_length=self.memory_length,
-            start_doy=self.start_doy,
+            context_length=self.context_length,
+            prediction_length=self.prediction_length,
         )
 
     def _build_val_dataset(self, years):
         return ForecastingAnomValDataset(
             dataset_path=self.dataset_path,
-            sentinel2_vars=self.sentinel2_vars,
-            era5_vars=self.era5_vars,
+            vegetation_indices=self.vegetation_indices,
+            weather_vars=self.weather_vars,
             years=years,
-            memory_length=self.memory_length,
-            start_doy=self.start_doy,
+            context_length=self.context_length,
+            prediction_length=self.prediction_length,
         )
 
 

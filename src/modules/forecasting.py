@@ -4,7 +4,7 @@ import os
 import numpy as np
 import xarray as xr
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
-
+from pathlib import Path
 import torch.nn.functional as F
 from torch import optim
 import torch.nn as nn
@@ -65,7 +65,7 @@ class ForecastingModule(LightningModule):
 
         mask = ~torch.isnan(y_true)
         y_pred, y_true = y_pred[mask], y_true[mask]
-        mask = torch.rand_like(y_true) < 0.2
+        # mask = torch.rand_like(y_true) < 0.2
         # loss = self.loss_fn(y_pred[mask], y_true[mask])
         loss = self.loss_fn(y_pred, y_true)
         #
@@ -92,6 +92,9 @@ class ForecastingModule(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        if batch is None:
+            return None
+
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
 
@@ -129,6 +132,8 @@ class ForecastingModule(LightningModule):
         return loss
 
     def test_step(self, batch, batch_idx):
+        if batch is None:
+            return None
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
 
@@ -160,98 +165,69 @@ class ForecastingModule(LightningModule):
                 "preds": y_pred.detach().cpu(),
                 "targets": y_true.detach().cpu(),
                 "mask": mask.detach().cpu(),
-                "year": batch["year"].cpu() if "year" in batch else None,
-                "sample_id": batch["sample_id"].cpu() if "sample_id" in batch else None,
+                "forecast_origin": batch["forecast_origin"].cpu(),
+                "sample_id": batch["sample_id"].cpu(),
             }
         )
         return loss
 
     def on_test_epoch_end(self):
-        predictions = torch.cat([x["preds"] for x in self.test_outputs])
-        targets = torch.cat([x["targets"] for x in self.test_outputs])
-        masks = torch.cat([x["mask"] for x in self.test_outputs])
 
-        years = torch.cat([x["year"] for x in self.test_outputs]).numpy()
+        predictions = torch.cat([x["preds"] for x in self.test_outputs]).squeeze(-1)
+
+        targets = torch.cat([x["targets"] for x in self.test_outputs]).squeeze(-1)
+
+        masks = torch.cat([x["mask"] for x in self.test_outputs]).squeeze(-1)
+
+        forecast_origins = torch.cat(
+            [x["forecast_origin"] for x in self.test_outputs]
+        ).numpy()
+
         sample_ids = torch.cat([x["sample_id"] for x in self.test_outputs]).numpy()
 
         dataset = self.trainer.datamodule.test_dataset
 
-        unique_years = np.unique(years)
+        lats = np.array([dataset.locations[int(sid)][0] for sid in sample_ids])
 
-        for year in unique_years:
+        lons = np.array([dataset.locations[int(sid)][1] for sid in sample_ids])
 
-            idx = years == year
+        ds = xr.Dataset(
+            data_vars={
+                "predictions": (
+                    ("window", "lead_time"),
+                    predictions.numpy(),
+                ),
+                "targets": (
+                    ("window", "lead_time"),
+                    targets.numpy(),
+                ),
+                "masks": (
+                    ("window", "lead_time"),
+                    masks.numpy(),
+                ),
+            },
+            coords={
+                "window": np.arange(len(sample_ids)),
+                "sample_id": ("window", sample_ids),
+                "latitude": ("window", lats),
+                "longitude": ("window", lons),
+                # "forecast_origin": ("window", forecast_origins),
+                "forecast_date": (
+                    "window",
+                    dataset.dataset.time_veg.values[forecast_origins],
+                ),
+                "lead_time": np.arange(self.config.prediction_length),
+            },
+        )
 
-            preds_year = predictions[idx]
-            targets_year = targets[idx]
-            masks_year = masks[idx]
+        ds.attrs["time_reference"] = "forecast_origin indexes dataset.time_veg"
+        ds.attrs["prediction_length"] = self.config.prediction_length
 
-            sample_ids_year = sample_ids[idx]
-
-            lats = np.array([dataset.locations[sid][0] for sid in sample_ids_year])
-
-            lons = np.array([dataset.locations[sid][1] for sid in sample_ids_year])
-
-            ds = xr.Dataset(
-                data_vars={
-                    "predictions": (
-                        ("sample", "time"),
-                        preds_year.squeeze(-1).numpy(),
-                    ),
-                    "targets": (
-                        ("sample", "time"),
-                        targets_year.squeeze(-1).numpy(),
-                    ),
-                    "masks": (
-                        ("sample", "time"),
-                        masks_year.squeeze(-1).numpy(),
-                    ),
-                },
-                coords={
-                    "time": dataset.year_times[int(year)],
-                    "latitude": ("sample", lats),
-                    "longitude": ("sample", lons),
-                    "sample_id": ("sample", sample_ids_year),
-                },
-            )
-
-            try:
-                pred_path = os.path.join(
-                    self.config.output_dir,
-                    f"{self.logger.experiment.id}_{int(year)}.zarr",
-                )
-            except Exception:
-                pred_path = os.path.join(
-                    self.config.output_dir,
-                    f"prediction_{int(year)}.zarr",
-                )
-
-            print(f"Saving predictions to {pred_path}")
-
-            ds.to_zarr(
-                pred_path,
-                mode="w",
-                encoding={
-                    "predictions": {
-                        "chunks": (
-                            min(1000, preds_year.shape[0]),
-                            preds_year.shape[1],
-                        )
-                    },
-                    "targets": {
-                        "chunks": (
-                            min(1000, targets_year.shape[0]),
-                            targets_year.shape[1],
-                        )
-                    },
-                    "masks": {
-                        "chunks": (
-                            min(1000, masks_year.shape[0]),
-                            masks_year.shape[1],
-                        )
-                    },
-                },
-            )
+        print("Saving path: ", Path(self.config.output_dir) / "predictions.zarr")
+        ds.to_zarr(
+            Path(self.config.output_dir) / "predictions.zarr",
+            mode="w",
+        )
 
         self.test_outputs.clear()
 

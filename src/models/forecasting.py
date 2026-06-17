@@ -186,9 +186,6 @@ class TransformerBaseline(nn.Module):
         super().__init__()
         veg_dim = len(data_config["vegetation"]["variables"])  # + 1
         weather_dim = len(data_config["weather"]["variables"])
-        T_veg = data_config["vegetation"]["sequence_length"]
-        T_weather = data_config["weather"]["sequence_length"]
-        memory_length = config.memory_length
 
         d_model = config.d_model
 
@@ -196,8 +193,8 @@ class TransformerBaseline(nn.Module):
             f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
         )
         self.veg_encoder = TimeSeriesTransformerEncoder(
-            input_dim=veg_dim + 1,
-            sequence_length=T_veg * memory_length,
+            input_dim=veg_dim,  # + 1,
+            sequence_length=config.context_length,
             d_model=d_model,
             num_heads=config.num_heads,
             num_layers=config.num_layers,
@@ -207,7 +204,7 @@ class TransformerBaseline(nn.Module):
         )
         self.weather_encoder = TimeSeriesTransformerEncoder(
             input_dim=weather_dim,
-            sequence_length=T_weather * memory_length,
+            sequence_length=config.context_length,
             d_model=d_model,
             num_heads=config.num_heads,
             num_layers=config.num_layers,
@@ -217,7 +214,7 @@ class TransformerBaseline(nn.Module):
         )
         self.weather_forecast_encoder = TimeSeriesTransformerEncoder(
             input_dim=weather_dim,
-            sequence_length=T_weather,
+            sequence_length=config.prediction_length,
             d_model=d_model,
             num_heads=config.num_heads,
             num_layers=config.num_layers,
@@ -241,7 +238,7 @@ class TransformerBaseline(nn.Module):
             #         "encoder_veg"
             #     )
             # )
-# 
+            #
             # self.weather_encoder.load_state_dict(
             #     extract_encoder_weights(
             #         state_dict,
@@ -265,7 +262,6 @@ class TransformerBaseline(nn.Module):
             #     param.requires_grad = False
             print("Loaded pretrained encoders for forecasting.")
 
-
         # --- Decoder: weather_forecast attends to past context ---
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
@@ -284,15 +280,17 @@ class TransformerBaseline(nn.Module):
         self.head = nn.Linear(d_model, veg_dim)
 
     def forward(self, batch):
+
         # Encode past: veg and weather history → sequence of tokens
         # batch["msc"] = torch.zeros_like(batch["msc"])
-        veg_input = torch.cat(
-            [
-                batch["vegetation_history"],
-                batch["msc"],
-            ],
-            dim=-1,
-        )
+        veg_input = batch["vegetation_history"]
+        # torch.cat(
+        #     [
+        #         batch["vegetation_history"],
+        #         batch["msc"],
+        #     ],
+        #     dim=-1,
+        # )
 
         veg_mem = self.veg_encoder(veg_input)  # [B, T_veg, d]
         weather_mem = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
