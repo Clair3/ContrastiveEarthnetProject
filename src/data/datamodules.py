@@ -9,8 +9,6 @@ from .datasets import (
     ContrastiveDataset,
     ForecastingTrainDataset,
     ForecastingValDataset,
-    ForecastingAnomTrainDataset,
-    ForecastingAnomValDataset,
 )
 from .batch_sampler import BatchSampler
 
@@ -100,9 +98,12 @@ class ForecastingDataModule(ContrastiveDataModule):
         num_workers=16,
     ):
         super().__init__(data_config, batch_size, num_workers)
+        self.batch_size = batch_size
+        self.num_workers = num_workers
         self.context_length = context_length
         self.prediction_length = prediction_length
 
+        self.dataset_path = Path(data_config["path"])
         self.train_years = data_config["forecasting"]["train"]
         self.val_years = data_config["forecasting"]["validation"]
         self.test_years = data_config["forecasting"]["test"]
@@ -115,7 +116,7 @@ class ForecastingDataModule(ContrastiveDataModule):
         self.test_dataset = self._build_val_dataset(years=self.test_years)
 
     def _build_train_dataset(self, years):
-        return ForecastingAnomTrainDataset(
+        return ForecastingTrainDataset(
             dataset_path=self.dataset_path,
             vegetation_indices=self.vegetation_indices,
             weather_vars=self.weather_vars,
@@ -125,7 +126,7 @@ class ForecastingDataModule(ContrastiveDataModule):
         )
 
     def _build_val_dataset(self, years):
-        return ForecastingAnomValDataset(
+        return ForecastingValDataset(
             dataset_path=self.dataset_path,
             vegetation_indices=self.vegetation_indices,
             weather_vars=self.weather_vars,

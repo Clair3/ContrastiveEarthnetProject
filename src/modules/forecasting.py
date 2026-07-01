@@ -60,14 +60,65 @@ class ForecastingModule(LightningModule):
                 prog_bar=True,
             )
             return None
+
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
 
+        # Shape should match y_true
+        # msc = batch["msc"]
+
+        # w = torch.abs(torch.diff(msc, dim=1, prepend=msc[:, :1]))
+        # weight = abs(dmsc)
+        # w = 0.2 + abs(dmsc) / abs(dmsc).max()
+        # # Normalize per sample
+        # w_min = w.amin(dim=1, keepdim=True)
+        # w_max = w.amax(dim=1, keepdim=True)
+        ##
+        ## # Normalize MSC to [0, 1]
+        # w = (w - w_min) / (w_max - w_min + 1e-8)
+        #
+        # # Optional: avoid giving almost zero weight to winter
+        # w = 0.2 + 0.8 * w
+
         mask = ~torch.isnan(y_true)
-        y_pred, y_true = y_pred[mask], y_true[mask]
+
+        # w = w[:, : mask.size(1), :][mask]
+        y_pred = y_pred[mask]
+        y_true = y_true[mask]
+
+        # loss_fn must have reduction="none"
+        loss = self.loss_fn(y_pred, y_true)
+
+        # loss = (w * loss).mean()
+
+        # # Normalize MSC to [0, 1]
+        # w = (msc - msc.min()) / (msc.max() - msc.min() + 1e-8)
+        #
+        # # Optional: avoid giving almost zero weight to winter
+        # w = 0.5 + 0.5 * w
+        #
+        # mask = ~torch.isnan(y_true)
+        #
+        # y_pred = y_pred[mask]
+        # y_true = y_true[mask]
+        # w = w[mask]
+        #
+        # # loss_fn must have reduction="none"
+        # loss = self.loss_fn(y_pred, y_true)
+        #
+        # loss = (w * loss).mean()
+
+        # y_pred = self(batch)
+        # y_true = batch["vegetation_forecast"]
+        # msc  = batch["msc"]
+        # w = msc / msc.max() - msc.min()
+        #
+        # mask = ~torch.isnan(y_true)
+        # y_pred, y_true = y_pred[mask], y_true[mask]
+        # loss = self.loss_fn(y_pred, y_true)
+
         # mask = torch.rand_like(y_true) < 0.2
         # loss = self.loss_fn(y_pred[mask], y_true[mask])
-        loss = self.loss_fn(y_pred, y_true)
         #
         # pred_monthly = F.adaptive_avg_pool1d(y_pred.transpose(1, 2), 12).transpose(1, 2)
         #
@@ -98,9 +149,35 @@ class ForecastingModule(LightningModule):
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
 
+        # Shape should match y_true
+        msc = batch["msc"]
+        # Normalize per sample
+        # msc_min = msc.amin(dim=1, keepdim=True)
+        # msc_max = msc.amax(dim=1, keepdim=True)
+        #
+        # # Normalize MSC to [0, 1]
+        # w = (msc - msc_min) / (msc_max - msc_min + 1e-8)
+        #
+        # # Optional: avoid giving almost zero weight to winter
+        # w = 0.2 + 0.8 * w
+
         mask = ~torch.isnan(y_true)
 
-        loss = self.loss_fn(y_pred[mask], y_true[mask])
+        # w = w[:, : mask.size(1), :][mask]
+        y_pred = y_pred[mask]
+        y_true = y_true[mask]
+
+        # loss_fn must have reduction="none"
+        loss = self.loss_fn(y_pred, y_true)
+
+        # loss = (w * loss).mean()
+
+        # y_pred = self(batch)
+        # y_true = batch["vegetation_forecast"]
+        #
+        # mask = ~torch.isnan(y_true)
+        #
+        # loss = self.loss_fn(y_pred[mask], y_true[mask])
 
         self.log(
             "val_loss",
@@ -136,6 +213,7 @@ class ForecastingModule(LightningModule):
             return None
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
+        persistence = batch["vegetation_history"][:, -1, :]
 
         mask = ~torch.isnan(y_true)
 
@@ -166,6 +244,7 @@ class ForecastingModule(LightningModule):
                 "targets": y_true.detach().cpu(),
                 "mask": mask.detach().cpu(),
                 "forecast_origin": batch["forecast_origin"].cpu(),
+                "persistence": persistence.detach().cpu(),
                 "sample_id": batch["sample_id"].cpu(),
             }
         )
@@ -173,15 +252,23 @@ class ForecastingModule(LightningModule):
 
     def on_test_epoch_end(self):
 
-        predictions = torch.cat([x["preds"] for x in self.test_outputs]).squeeze(-1)
+        predictions = (
+            torch.cat([x["preds"] for x in self.test_outputs]).squeeze(-1).numpy()
+        )
 
-        targets = torch.cat([x["targets"] for x in self.test_outputs]).squeeze(-1)
+        targets = (
+            torch.cat([x["targets"] for x in self.test_outputs]).squeeze(-1).numpy()
+        )
 
-        masks = torch.cat([x["mask"] for x in self.test_outputs]).squeeze(-1)
+        masks = torch.cat([x["mask"] for x in self.test_outputs]).squeeze(-1).numpy()
 
         forecast_origins = torch.cat(
             [x["forecast_origin"] for x in self.test_outputs]
         ).numpy()
+
+        persistence = (
+            torch.cat([x["persistence"] for x in self.test_outputs]).squeeze(-1).numpy()
+        )
 
         sample_ids = torch.cat([x["sample_id"] for x in self.test_outputs]).numpy()
 
@@ -195,15 +282,19 @@ class ForecastingModule(LightningModule):
             data_vars={
                 "predictions": (
                     ("window", "lead_time"),
-                    predictions.numpy(),
+                    predictions,
                 ),
                 "targets": (
                     ("window", "lead_time"),
-                    targets.numpy(),
+                    targets,
                 ),
                 "masks": (
                     ("window", "lead_time"),
-                    masks.numpy(),
+                    masks,
+                ),
+                "persistence": (
+                    ("window",),
+                    persistence,
                 ),
             },
             coords={
@@ -211,7 +302,6 @@ class ForecastingModule(LightningModule):
                 "sample_id": ("window", sample_ids),
                 "latitude": ("window", lats),
                 "longitude": ("window", lons),
-                # "forecast_origin": ("window", forecast_origins),
                 "forecast_date": (
                     "window",
                     dataset.dataset.time_veg.values[forecast_origins],

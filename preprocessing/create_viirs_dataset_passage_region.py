@@ -1,3 +1,5 @@
+# %%
+
 import re
 import numpy as np
 import xarray as xr
@@ -194,7 +196,7 @@ def normalize_weather_variables(
 
     for var in weather_vars:
         # Apply log1p transform to precipitation
-        if var.startswith("tp_") or var == "P":
+        if var.startswith("tp_"):
             dataset_array = np.log1p(dataset[var])
             transform_type = "log1p + z-score"
         else:
@@ -225,17 +227,121 @@ def compute_anomalies(veg_index, msc):
     return anomalies
 
 
+# %%
+
+# Configuration
+OUTPUT_DIR = "datasets/VIIRS_Passage_NDVI.zarr"
+SCRATCH_DIR = Path(
+    "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets"
+)
+VIIRS_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/VIIRS_gapfilled.zarr/NDVIgapfilled_001_QCdyn.zarr"  # VIIRS_gapfilled.zarr" # "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/MODIS_gapfilled061.zarr/EVIgapfilled_061_QCdyn.zarr"  #
+VIIRS_VARIABLE = "NDVIgapfilled_QCdyn"  # "EVIgapfilled_QCfix"
+GAPFILL_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/VIIRS_VI_perRegion002mergedGF/NDVI/Groups_NDVIgapfilltype_QCfix.zarr"  # "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/EVI/Groups_EVIgapfilltype_QCdyn.zarr"  #
+GAPFILL_VARIABLE = "EVIgapfilltype_QCfix"
+ERA5_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/ERA5_daily.zarr"
+VEG_VAR = "ndvi"
+WEATHER_VARS = ["P", "SW_IN", "TA", "TA_max", "TA_min", "VPD", "VPD_min", "VPD_max"]
+
+# %%
+print("\n=== Building ROI locations ===")
+import geopandas as gpd
+
+gdf = gpd.read_file(
+    "/Net/Groups/BGI/scratch/mzehner/code/VCI3M/sampling/vnp43IA4_pixels_in_roi_histo_filtered_sampled_non_overlapping.gpkg"
+)
+# Equal-area projection suitable for global data
+gdf_proj = gdf.to_crs("EPSG:6933")
+centroids = gdf_proj.centroid
+# Back to lon/lat
+centroids = gpd.GeoSeries(centroids, crs="EPSG:6933").to_crs("EPSG:4326")
+lons = centroids.x
+lats = centroids.y
+
+# %%
+viirs_ds = xr.open_zarr(VIIRS_PATH)
+viirs = subset_viirs(
+    viirs_ds, variable=VIIRS_VARIABLE, vi_name=VEG_VAR, lons=lons, lats=lats
+)
+era_ds = xr.open_zarr(ERA5_PATH)  # .mean("number")
+era = subset_era(era_ds, lons, lats)
+viirs, era = xr.align(viirs, era, join="inner")
+ds = xr.merge([viirs, era], compat="override")
+ds = ds.sel(time=slice("2012-01-01T12:00:00", "2025-12-31T12:00:00"))
+ds = ds.rename({"locations": "sample"})
+ds = ds.rename({"lat": "latitude"})
+ds = ds.rename({"lon": "longitude"})
+ds = ds.transpose("sample", "time")
+
+# %%
+import copy
+
+ds_veg = ds[VEG_VAR]
+doy = ds_veg["time"].dt.dayofyear
+msc = ds_veg.groupby(doy).mean("time")
+# gapfill_ds = xr.open_zarr(GAPFILL_PATH)
+# gapfill = subset_viirs(
+#     gapfill_ds, variable=GAPFILL_VARIABLE, vi_name="mask", lons=lons, lats=lats
+# )
+# gapfill = gapfill.rename({"locations": "sample"})
+#
+# viirs, gapfill = xr.align(viirs, gapfill, join="inner")
+#
+# # %%
+# ds_veg = ds_veg.where(gapfill["mask"] == 0)
+
+ds_veg = ds_veg.rename({"time": "time_veg"})
+
+ds_anom = compute_anomalies(ds_veg, msc)
+ds_veg = ds_veg.chunk({"sample": 1000, "time_veg": 365})
+ds_anom = ds_anom.chunk({"sample": 1000, "time_veg": 365})
+
+# %%
+# normalize MSC globally
+mean_msc = msc.mean(dim="dayofyear")
+std_msc = msc.std(dim="dayofyear")
+msc = (msc - mean_msc) / (std_msc + 1e-8)
+msc = msc.chunk({"sample": 1000, "dayofyear": 366})
+ds_weather = ds[WEATHER_VARS].rename({"time": "time_weather"})
+print("\n=== Normalizing weather variables ===")
+ds_weather = normalize_weather_variables(ds_weather, WEATHER_VARS)
+dataset = xr.merge([ds_veg, ds_anom.rename("anomalies"), ds_weather, msc.rename("msc")])
+print("\n=== Chunking dataset ===")
+dataset = dataset.chunk(
+    {"sample": 1000, "time_weather": 365, "time_veg": 365, "dayofyear": 366}
+)
+
+# %%
+
+OUTPUT_DIR = "datasets/VIIRS_Passage_NDVI_gapfill.zarr"
+
+print("\n=== Saving datasets and copying to tscratch ===")
+scratch_path = SCRATCH_DIR / OUTPUT_DIR
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(scratch_path, exist_ok=True)
+if dataset is not None:
+    dataset_path = Path(OUTPUT_DIR)
+    dataset.to_zarr(dataset_path, mode="w", consolidated=True)
+    subprocess.run(
+        [
+            "rsync",
+            "-a",
+            str(dataset_path),
+            str(SCRATCH_DIR),
+        ],
+        check=True,
+    )
+print("\n=== Done! ===")
+# %%
+
+
 def main():
     """Main preprocessing pipeline."""
 
     # Configuration
-    OUTPUT_DIR = "datasets/VIIRS_evi_no_gapfill.zarr"
+    OUTPUT_DIR = "datasets/VIIRS_Passage_EVI.zarr"
     SCRATCH_DIR = Path(
         "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets"
     )
-
-    SAMPLES_PATHS = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/sample_paths.txt"
-
     VIIRS_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/VIIRS_gapfilled.zarr/EVIgapfilled_002_QCfix.zarr"  # VIIRS_gapfilled.zarr" # "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/MODIS_gapfilled061.zarr/EVIgapfilled_061_QCdyn.zarr"  #
     VIIRS_VARIABLE = "EVIgapfilled_QCfix"
     GAPFILL_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/VIIRS_VI_perRegion002mergedGF/EVI/Groups_EVIgapfilltype_QCfix.zarr"  # "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/MODIS_VI_perRegion061/EVI/Groups_EVIgapfilltype_QCdyn.zarr"  #
@@ -248,10 +354,26 @@ def main():
     VEG_VAR = "evi"
     WEATHER_VARS = ["P", "SW_IN", "TA", "TA_max", "TA_min", "VPD", "VPD_min", "VPD_max"]
 
-    print("\n=== Loading samples ===")
-    lons, lats = extract_locations_from_paths(path_file=SAMPLES_PATHS)
+    print("\n=== Building ROI locations ===")
+    import geopandas as gpd
+
+    gdf = gpd.read_file(
+        "/Net/Groups/BGI/scratch/mzehner/code/VCI3M/sampling/vnp43IA4_pixels_in_roi_histo_filtered_sampled_non_overlapping.gpkg"
+    )
+
+    # Equal-area projection suitable for global data
+    gdf_proj = gdf.to_crs("EPSG:6933")
+
+    centroids = gdf_proj.centroid
+
+    # Back to lon/lat
+    centroids = gpd.GeoSeries(centroids, crs="EPSG:6933").to_crs("EPSG:4326")
+
+    lons = centroids.x
+    lats = centroids.y
 
     viirs_ds = xr.open_zarr(VIIRS_PATH)
+
     viirs = subset_viirs(
         viirs_ds, variable=VIIRS_VARIABLE, vi_name=VEG_VAR, lons=lons, lats=lats
     )
@@ -263,18 +385,6 @@ def main():
     ds = xr.merge([viirs, era], compat="override")
 
     ds = ds.sel(time=slice("2012-01-01T12:00:00", "2025-12-31T12:00:00"))
-    # ds = ds.sel(time=~((ds["time"].dt.month == 2) & (ds["time"].dt.day == 29)))
-    #
-    # ds["evi"] = ds.evi.groupby("time.year").map(
-    #     lambda x: x.resample(time="5D", origin="start").mean()
-    # )
-
-    # MSC (Jan 1 anchored bins)
-    # ds["msc"] = (
-    #     ds.msc.groupby_bins("dayofyear", bins=np.arange(1, 367, 5), right=False)
-    #     .mean()
-    #     .rename({"dayofyear_bins": "dayofyear_5d"})
-    # )
 
     ds = ds.rename({"locations": "sample"})
     ds = ds.rename({"lat": "latitude"})
@@ -292,12 +402,15 @@ def main():
         gapfill_ds, variable=GAPFILL_VARIABLE, vi_name="mask", lons=lons, lats=lats
     )
     viirs, gapfill = xr.align(viirs, gapfill, join="inner")
+    veg = copy.deepcopy(ds_veg)
     ds_veg = ds_veg.where(gapfill["mask"] == 0)
 
     ds_veg = ds_veg.rename({"time": "time_veg"})
+    veg = veg.rename({"time": "time_veg"})
 
     ds_veg["anomalies"] = compute_anomalies(ds_veg, msc)
     ds_veg = ds_veg.chunk({"sample": 1000, "time_veg": 365})
+    veg = veg.chunk({"sample": 1000, "time_veg": 365})
 
     # normalize MSC globally
     mean_msc = msc.mean(dim="dayofyear")
@@ -309,7 +422,13 @@ def main():
     print("\n=== Normalizing weather variables ===")
     ds_weather = normalize_weather_variables(ds_weather, WEATHER_VARS)
 
-    dataset = xr.merge([ds_veg, ds_weather, msc.rename("msc")])
+    dataset = xr.merge(
+        [
+            ds_veg,
+            ds_weather,
+            msc.rename("msc"),
+        ]
+    )
 
     print("\n=== Chunking dataset ===")
     dataset = dataset.chunk(

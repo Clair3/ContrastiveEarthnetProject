@@ -68,7 +68,7 @@ class BaseExperiment:
 
         early_stop = EarlyStopping(
             monitor="val_loss",
-            patience=5,
+            patience=10,
             mode="min",
         )
 
@@ -81,16 +81,17 @@ class BaseExperiment:
             max_epochs=self.config.max_epochs,
             accelerator="gpu",
             devices=self.config.gpu_device,
-            val_check_interval=0.1,
+            val_check_interval=0.2,
             precision="16-mixed",
             logger=logger,
             callbacks=self.build_callbacks(wandb.run.id) if wandb.run else None,
             log_every_n_steps=32,
             gradient_clip_val=self.config.gradient_clip_val,
             deterministic=True,
-            accumulate_grad_batches=(
-                30 if self.data_config["contrastive"].get("batch_sampler", False) else 1
-            ),
+            accumulate_grad_batches=1,
+            # (
+            #     30 if self.data_config["contrastive"].get("batch_sampler", False) else 1
+            # ),
             enable_progress_bar=True,
         )
 
@@ -418,12 +419,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config_MODIS.yaml",
+        default="data_config_VIIRS_weather_norm.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--run_name",
-        default=None,  # "g4u7970n",  # "k6qige6q",  # "qoj0owg6",  # "53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k", "qoj0owg6",  #
+        default="d0686mzv",  # None,  # "ppj1fh2v", #None,  # "a28nl7qz",  # None,  # "fleagmb2",  # None,  # "g4u7970n",  # "k6qige6q",  # "qoj0owg6",  # "53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k", "qoj0owg6",  #
         help="Path of the model weights. If None, the training of the experiment is executed. If a path is provided, the evaluation mode is executed.",
     )
     parser.add_argument(

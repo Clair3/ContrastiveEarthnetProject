@@ -5,7 +5,6 @@ from .forecasting import (
     TransformerBaseline,
     LinearRegressionBaseline,
     MLP,
-    TransformerEncoderOnly,
 )
 
 from .probing import RegressionHead, CLSHead
@@ -17,5 +16,4 @@ ModelClass = {
     "MLP": MLP,
     "RegressionHead": RegressionHead,
     "CLSHead": CLSHead,
-    "TransformerEncoderOnly": TransformerEncoderOnly,
 }
