@@ -5,26 +5,7 @@ from scipy.spatial import cKDTree
 from pathlib import Path
 import os
 import subprocess
-
-
-def extract_locations_from_paths(path_file):
-    # --- 1. Extract lon/lat from file ---
-    pattern = re.compile(r"mc_(-?\d+\.\d+)_(-?\d+\.\d+)")
-
-    lons, lats = [], []
-
-    with open(path_file, "r") as f:
-        for line in f:
-            match = pattern.search(line)
-            if match:
-                lon, lat = map(float, match.groups())
-                lons.append(lon)
-                lats.append(lat)
-
-    # keep only first n points
-    lons = np.array(lons)
-    lats = np.array(lats)
-    return lons, lats
+import pandas as pd
 
 
 def subset_era(ds, lons, lats):
@@ -35,10 +16,10 @@ def subset_era(ds, lons, lats):
     ----------
     ds : xarray.Dataset
         The large ERA dataset
-    path_file : str
-        File containing paths with embedded lon/lat
-    n_points : int
-        Number of locations to use (default=10 for testing)
+    lons : array-like
+        Longitudes of locations to extract
+    lats : array-like
+        Latitudes of locations to extract
 
     Returns
     -------
@@ -229,12 +210,12 @@ def main():
     """Main preprocessing pipeline."""
 
     # Configuration
-    OUTPUT_DIR = "datasets/VIIRS_evi_no_gapfill.zarr"
+    OUTPUT_DIR = "datasets/VIIRS_arid_global.zarr"  # evi_no_gapfill.zarr"
     SCRATCH_DIR = Path(
         "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets"
     )
 
-    SAMPLES_PATHS = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/preprocessing/sample_paths.txt"
+    SAMPLES_PATHS = "/Net/Groups/BGI/scratch/crobin/PythonProjects/ContrastiveEarthnetProject/models_comparisons/sample_arid_semi_arid_50000.csv"
 
     VIIRS_PATH = "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/VIIRS_gapfilled.zarr/EVIgapfilled_002_QCfix.zarr"  # VIIRS_gapfilled.zarr" # "/Net/Groups/BGI/work_4/scratch/fluxcom/upscaling_inputs/MODIS_gapfilled061.zarr/EVIgapfilled_061_QCdyn.zarr"  #
     VIIRS_VARIABLE = "EVIgapfilled_QCfix"
@@ -249,7 +230,8 @@ def main():
     WEATHER_VARS = ["P", "SW_IN", "TA", "TA_max", "TA_min", "VPD", "VPD_min", "VPD_max"]
 
     print("\n=== Loading samples ===")
-    lons, lats = extract_locations_from_paths(path_file=SAMPLES_PATHS)
+    df = pd.read_csv(SAMPLES_PATHS)
+    lons, lats = df["lon"].values, df["lat"].values
 
     viirs_ds = xr.open_zarr(VIIRS_PATH)
     viirs = subset_viirs(
@@ -263,18 +245,6 @@ def main():
     ds = xr.merge([viirs, era], compat="override")
 
     ds = ds.sel(time=slice("2012-01-01T12:00:00", "2025-12-31T12:00:00"))
-    # ds = ds.sel(time=~((ds["time"].dt.month == 2) & (ds["time"].dt.day == 29)))
-    #
-    # ds["evi"] = ds.evi.groupby("time.year").map(
-    #     lambda x: x.resample(time="5D", origin="start").mean()
-    # )
-
-    # MSC (Jan 1 anchored bins)
-    # ds["msc"] = (
-    #     ds.msc.groupby_bins("dayofyear", bins=np.arange(1, 367, 5), right=False)
-    #     .mean()
-    #     .rename({"dayofyear_bins": "dayofyear_5d"})
-    # )
 
     ds = ds.rename({"locations": "sample"})
     ds = ds.rename({"lat": "latitude"})
@@ -284,32 +254,32 @@ def main():
 
     ds_veg = ds[VEG_VAR]
 
-    doy = ds_veg["time"].dt.dayofyear
-    msc = ds_veg.groupby(doy).mean("time")
-
-    gapfill_ds = xr.open_zarr(GAPFILL_PATH)
-    gapfill = subset_viirs(
-        gapfill_ds, variable=GAPFILL_VARIABLE, vi_name="mask", lons=lons, lats=lats
-    )
-    viirs, gapfill = xr.align(viirs, gapfill, join="inner")
-    ds_veg = ds_veg.where(gapfill["mask"] == 0)
+    # doy = ds_veg["time"].dt.dayofyear
+    # msc = ds_veg.groupby(doy).mean("time")
+    #
+    # gapfill_ds = xr.open_zarr(GAPFILL_PATH)
+    # gapfill = subset_viirs(
+    #     gapfill_ds, variable=GAPFILL_VARIABLE, vi_name="mask", lons=lons, lats=lats
+    # )
+    # viirs, gapfill = xr.align(viirs, gapfill, join="inner")
+    # ds_veg = ds_veg.where(gapfill["mask"] == 0)
 
     ds_veg = ds_veg.rename({"time": "time_veg"})
 
-    ds_veg["anomalies"] = compute_anomalies(ds_veg, msc)
-    ds_veg = ds_veg.chunk({"sample": 1000, "time_veg": 365})
-
-    # normalize MSC globally
-    mean_msc = msc.mean(dim="dayofyear")
-    std_msc = msc.std(dim="dayofyear")
-    msc = (msc - mean_msc) / (std_msc + 1e-8)
-    msc = msc.chunk({"sample": 1000, "dayofyear": 366})
-
+    # ds_veg["anomalies"] = compute_anomalies(ds_veg, msc)
+    # ds_veg = ds_veg.chunk({"sample": 1000, "time_veg": 365})
+    #
+    # # normalize MSC globally
+    # mean_msc = msc.mean(dim="dayofyear")
+    # std_msc = msc.std(dim="dayofyear")
+    # msc = (msc - mean_msc) / (std_msc + 1e-8)
+    # msc = msc.chunk({"sample": 1000, "dayofyear": 366})
+    #
     ds_weather = ds[WEATHER_VARS].rename({"time": "time_weather"})
-    print("\n=== Normalizing weather variables ===")
-    ds_weather = normalize_weather_variables(ds_weather, WEATHER_VARS)
+    # print("\n=== Normalizing weather variables ===")
+    # ds_weather = normalize_weather_variables(ds_weather, WEATHER_VARS)
 
-    dataset = xr.merge([ds_veg, ds_weather, msc.rename("msc")])
+    dataset = xr.merge([ds_veg, ds_weather])  # , msc.rename("msc")])
 
     print("\n=== Chunking dataset ===")
     dataset = dataset.chunk(

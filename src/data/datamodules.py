@@ -38,7 +38,6 @@ class ContrastiveDataModule(LightningDataModule):
         self.val_years = data_config["contrastive"]["validation"]
         self.test_years = data_config["contrastive"]["test"]
         self.batch_sampler = data_config["contrastive"].get("batch_sampler", False)
-        print(self.batch_sampler)
 
     def _build_dataset(self, years):
         return ContrastiveDataset(

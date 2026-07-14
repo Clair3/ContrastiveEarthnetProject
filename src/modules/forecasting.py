@@ -3,7 +3,12 @@ import os
 
 import numpy as np
 import xarray as xr
-from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+from torch.optim.lr_scheduler import (
+    SequentialLR,
+    LinearLR,
+    CosineAnnealingLR,
+    PolynomialLR,
+)
 from pathlib import Path
 import torch.nn.functional as F
 from torch import optim
@@ -64,72 +69,31 @@ class ForecastingModule(LightningModule):
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
 
-        # Shape should match y_true
         # msc = batch["msc"]
-
-        # w = torch.abs(torch.diff(msc, dim=1, prepend=msc[:, :1]))
-        # weight = abs(dmsc)
-        # w = 0.2 + abs(dmsc) / abs(dmsc).max()
-        # # Normalize per sample
-        # w_min = w.amin(dim=1, keepdim=True)
-        # w_max = w.amax(dim=1, keepdim=True)
-        ##
-        ## # Normalize MSC to [0, 1]
-        # w = (w - w_min) / (w_max - w_min + 1e-8)
-        #
-        # # Optional: avoid giving almost zero weight to winter
-        # w = 0.2 + 0.8 * w
+        # Normalize per sample
+        # vmsc_min = msc.amin(dim=1, keepdim=True)
+        # vmsc_max = msc.amax(dim=1, keepdim=True)
+        # v#
+        # v# # Normalize MSC to [0, 1]
+        # vw = (msc - msc_min) / (msc_max - msc_min + 1e-8)
+        # v#
+        # v# # Optional: avoid giving almost zero weight to winter
+        # vw = 0.1 + 0.9 * w
+        # w = 0.1 + 0.9 * (msc - msc.min()) / (msc.max() - msc.min() + 1e-8)
 
         mask = ~torch.isnan(y_true)
 
         # w = w[:, : mask.size(1), :][mask]
         y_pred = y_pred[mask]
         y_true = y_true[mask]
+        # print(y_pred.shape, y_true.shape, mask.shape)  # w.shape)
 
-        # loss_fn must have reduction="none"
+        # loss = (w * (y_pred - y_true) ** 2).mean()
+        # print(loss)
+
         loss = self.loss_fn(y_pred, y_true)
-
-        # loss = (w * loss).mean()
-
-        # # Normalize MSC to [0, 1]
-        # w = (msc - msc.min()) / (msc.max() - msc.min() + 1e-8)
-        #
-        # # Optional: avoid giving almost zero weight to winter
-        # w = 0.5 + 0.5 * w
-        #
-        # mask = ~torch.isnan(y_true)
-        #
-        # y_pred = y_pred[mask]
-        # y_true = y_true[mask]
-        # w = w[mask]
-        #
-        # # loss_fn must have reduction="none"
-        # loss = self.loss_fn(y_pred, y_true)
         #
         # loss = (w * loss).mean()
-
-        # y_pred = self(batch)
-        # y_true = batch["vegetation_forecast"]
-        # msc  = batch["msc"]
-        # w = msc / msc.max() - msc.min()
-        #
-        # mask = ~torch.isnan(y_true)
-        # y_pred, y_true = y_pred[mask], y_true[mask]
-        # loss = self.loss_fn(y_pred, y_true)
-
-        # mask = torch.rand_like(y_true) < 0.2
-        # loss = self.loss_fn(y_pred[mask], y_true[mask])
-        #
-        # pred_monthly = F.adaptive_avg_pool1d(y_pred.transpose(1, 2), 12).transpose(1, 2)
-        #
-        # target_monthly = F.adaptive_avg_pool1d(y_true.transpose(1, 2), 12).transpose(
-        #     1, 2
-        # )
-        # loss_monthly = self.loss_fn(pred_monthly, target_monthly)
-        #
-        # loss_seasonal = self.loss_fn(y_pred.mean(dim=1), y_true.mean(dim=1))
-        #
-        # loss = 0.5 * loss_daily + 0.3 * loss_monthly + 0.2 * loss_seasonal
 
         self.log(
             "train_loss",
@@ -150,7 +114,7 @@ class ForecastingModule(LightningModule):
         y_true = batch["vegetation_forecast"]
 
         # Shape should match y_true
-        msc = batch["msc"]
+        # msc = batch["msc"]
         # Normalize per sample
         # msc_min = msc.amin(dim=1, keepdim=True)
         # msc_max = msc.amax(dim=1, keepdim=True)
@@ -331,6 +295,7 @@ class ForecastingModule(LightningModule):
             lr=lr,
             weight_decay=self.config.weight_decay,  # L2 norm parameters
         )
+
         warmup_steps = int(warmup_fraction * total_steps)
         warmup = LinearLR(
             optimizer,
@@ -342,7 +307,7 @@ class ForecastingModule(LightningModule):
         cosine = CosineAnnealingLR(
             optimizer,
             T_max=total_steps - warmup_steps,
-            eta_min=lr * 0.05,
+            eta_min=lr * 0.005,
         )
 
         scheduler = SequentialLR(

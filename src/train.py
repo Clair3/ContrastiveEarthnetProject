@@ -419,12 +419,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data_config_file",
-        default="data_config_VIIRS_weather_norm.yaml",
+        default="data_config_VIIRS_passage.yaml",
         help="Path to data config file (relative to project/configs/)",
     )
     parser.add_argument(
         "--run_name",
-        default="d0686mzv",  # None,  # "ppj1fh2v", #None,  # "a28nl7qz",  # None,  # "fleagmb2",  # None,  # "g4u7970n",  # "k6qige6q",  # "qoj0owg6",  # "53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k", "qoj0owg6",  #
+        default="o03jeetw", # None, #"j3fgpisl", #"za90ubzz",  # None,  # "ug77kly8",  # None,  # "yqbclumu",  # None,  # "d0686mzv",  # None,  # "ppj1fh2v", #None,  # "a28nl7qz",  # None,  # "fleagmb2",  # None,  # "g4u7970n",  # "k6qige6q",  # "qoj0owg6",  # "53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k", "qoj0owg6",  #
         help="Path of the model weights. If None, the training of the experiment is executed. If a path is provided, the evaluation mode is executed.",
     )
     parser.add_argument(

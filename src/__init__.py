@@ -1,7 +1,7 @@
-from data import ContrastiveDataModule, ForecastingDataModule
-from src.modules.contrastive import ContrastiveTrainingModule
-from src.modules.forecasting import ForecastingTrainModule
-from models import TimeSeriesTransformerEncoder, ModelClass
+from src.data import ContrastiveDataModule, ForecastingDataModule
+from src.modules.contrastive import ContrastiveModule
+from src.modules.forecasting import ForecastingModule
+from src.models import TimeSeriesTransformerEncoder, ModelClass
 
 from pathlib import Path
 

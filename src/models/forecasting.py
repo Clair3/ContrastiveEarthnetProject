@@ -203,7 +203,7 @@ class TransformerBaseline(nn.Module):
             seasonal_positional_encoding=config.seasonal_positional_encoding,
         )
         self.weather_encoder = TimeSeriesTransformerEncoder(
-            input_dim=weather_dim,
+            input_dim=weather_dim * 2,
             sequence_length=config.context_length,
             d_model=d_model,
             num_heads=config.num_heads,
