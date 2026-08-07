@@ -11,6 +11,10 @@ from torch.utils.data import Dataset
 import copy
 import random
 
+from torchvision.transforms import Compose
+
+from .transform import RandomFeatureMask, RandomGaussianJitter
+
 
 class BaseDataset(Dataset):
 
@@ -25,11 +29,10 @@ class BaseDataset(Dataset):
     ):
         self.vegetation_indices = vegetation_indices
         self.weather_vars = weather_vars
-        print(self.weather_vars)
 
         self.context_length = context_length
         self.prediction_length = prediction_length
-        self.stride = 16  # 32  # 16
+        self.stride = 16
 
         self.dataset = self.dataset_split(
             dataset_path=dataset_path,
@@ -59,14 +62,37 @@ class BaseDataset(Dataset):
             Dataset filtered to only include samples from the specified years
         """
         dataset = xr.open_zarr(dataset_path)
-        # # self.context_length number of day of lookbacks
-        # context_years = self.context_length // 365
-        # years_with_context = list(range(min(years) - context_years, max(years) + 1))
         print(f"Loading dataset from {dataset_path} and filtering for years {years}")
-        return dataset.sel(
+
+        dataset = dataset.sel(
             time_veg=pd.DatetimeIndex(dataset.time_veg.values).year.isin(years),
             time_weather=pd.DatetimeIndex(dataset.time_weather.values).year.isin(years),
-        ).load()
+        )
+
+        # weather_vars = [
+        #     v for v, da in dataset.data_vars.items() if "time_weather" in da.dims
+        # ]
+        # veg_vars = [v for v, da in dataset.data_vars.items() if "time_veg" in da.dims]
+        #
+        # veg = (
+        #     dataset[veg_vars]
+        #     .rename(time_veg="time")
+        #     .groupby("time.year")
+        #     .map(lambda ds: ds.coarsen(time=5, boundary="trim").mean())
+        #     .rename(time="time_veg")
+        # )
+        #
+        # weather = (
+        #     dataset[weather_vars]
+        #     .rename(time_weather="time")
+        #     .groupby("time.year")
+        #     .map(lambda ds: ds.coarsen(time=5, boundary="trim").mean())
+        #     .rename(time="time_weather")
+        # )
+        # out = dataset.drop_vars(veg_vars + weather_vars)
+        # dataset = xr.merge([out, veg, weather])
+
+        return dataset.load()
 
     def _create_training_pairs(self):
 
@@ -132,40 +158,6 @@ class BaseDataset(Dataset):
             self.msc.append(msc_time)
             self.weather_msc.append(weather_msc_time)
 
-    # def _preload_data(self):
-    #
-    #     self.vegetation = []
-    #     self.weather = []
-    #     self.msc = []
-    #     self._build_doy_lookup()
-    #
-    #     for sample_id in range(self.num_samples):
-    #
-    #         sample = self.dataset.isel(sample=sample_id)
-    #         veg = torch.as_tensor(
-    #             np.stack(
-    #                 [sample[var].values for var in self.vegetation_indices],
-    #                 axis=1,
-    #             ),
-    #             dtype=torch.float32,
-    #         )
-    #
-    #         weather = torch.as_tensor(
-    #             np.stack(
-    #                 [sample[var].values for var in self.weather_vars],
-    #                 axis=1,
-    #             ),
-    #             dtype=torch.float32,
-    #         )
-    #         msc = self._preload_msc(sample_id)
-    #
-    #         # Expand climatology onto the time axis
-    #         msc_time = msc[self.doy_lookup]
-    #
-    #         self.vegetation.append(veg)
-    #         self.weather.append(weather)
-    #         self.msc.append(msc_time)
-
     def _preload_msc(self, sample_id):
         msc = self.dataset.isel(sample=sample_id).msc
         if msc.size == 366:
@@ -200,7 +192,7 @@ class BaseDataset(Dataset):
 
         doy = time.dt.dayofyear.values.copy()
         is_leap = time.dt.is_leap_year.values
-
+        # if doy.shape[0] == 366:
         # Match the MSC where Feb 29 has been removed
         doy[(doy == 60) & is_leap] = 59
         doy[(doy > 60) & is_leap] -= 1
@@ -226,6 +218,11 @@ class BaseDataset(Dataset):
         weather_msc = self.weather_msc[sample_id]
         msc = self.msc[sample_id]
 
+        msc_slice = slice(
+            t0 - 365,
+            t0,
+        )
+
         hist_slice = slice(
             t0 - self.context_length,
             t0,
@@ -236,42 +233,44 @@ class BaseDataset(Dataset):
             t0 + self.prediction_length,
         )
 
+        weather_msc = weather_msc[msc_slice]
+        msc = msc[msc_slice]
+
         vegetation_history = veg[hist_slice]
-        weather_history = torch.cat(
-            [
-                weather[hist_slice],
-                weather_msc[hist_slice],
-            ],
-            dim=-1,
-        )
+        weather_history = weather[hist_slice]
 
-        # vegetation_forecast = veg[forecast_slice]
         vegetation_forecast = veg[forecast_slice]
-
         weather_forecast = weather[forecast_slice]
-        msc = msc[hist_slice]
+
+        hist_doy = self.doy_lookup[hist_slice]
+        climate_doy = self.doy_lookup[msc_slice]
+        forecast_doy = self.doy_lookup[forecast_slice]
 
         self._validate_tensors(
             vegetation_history,
             vegetation_forecast,
             weather_forecast,
         )
+        # vegetation_history[-30:] = torch.nan
 
         sample = {
+            "msc": msc,
+            "weather_msc": weather_msc,
             "vegetation_history": vegetation_history,
             "weather_history": weather_history,
             "vegetation_forecast": vegetation_forecast,
             "weather_forecast": weather_forecast,
-            "msc": msc,
-            "weather_msc": weather_msc,
+            "hist_doy": hist_doy,
+            "climate_doy": climate_doy,
+            "forecast_doy": forecast_doy,
         }
 
         if include_metadata:
             sample.update(
                 {
                     "sample_id": torch.tensor(sample_id),
-                    "forecast_origin": torch.tensor(t0),
                     "location": self.locations[sample_id],
+                    "forecast_origin": torch.tensor(t0),
                 }
             )
 
@@ -309,11 +308,43 @@ class ContrastiveDataset(BaseDataset):
 
 
 class ForecastingTrainDataset(BaseDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.transform = Compose(
+            [
+                RandomFeatureMask(
+                    keys=[
+                        "weather_history",
+                        "vegetation_history",
+                        "msc",
+                        "weather_msc",
+                    ],
+                    p_feature=0.2,
+                ),
+                RandomGaussianJitter(
+                    keys=[
+                        "weather_history",
+                        "vegetation_history",
+                        "msc",
+                        "weather_msc",
+                    ],
+                    p_feature=0.5,
+                    sigma=0.05,
+                ),
+            ]
+        )
 
     def __getitem__(self, idx):
         try:
             sample_id, t0 = self.training_pairs[idx]
-            return self._get_sample(sample_id, t0)
+            sample = self._get_sample(sample_id, t0)
+
+            if self.transform is not None:
+                sample = self.transform(sample)
+
+            return sample
+
         except Exception as e:
             # print(f"Skipping sample {idx} due to {e}.")
             return None

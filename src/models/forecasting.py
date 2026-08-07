@@ -4,6 +4,9 @@ from .encoders import TimeSeriesTransformerEncoder
 from .positional_encoding import ClassicPositionalEncoding
 import torch.nn.functional as F
 import copy
+import math
+import torch
+import torch.nn as nn
 
 
 class LinearRegressionBaseline(nn.Module):
@@ -181,7 +184,7 @@ class LSTM(nn.Module):
         return torch.cat(preds, dim=1)
 
 
-class TransformerBaseline(nn.Module):
+class TransformerBaseline1(nn.Module):
     def __init__(self, data_config, config, pretrained_checkpoint=None):
         super().__init__()
         veg_dim = len(data_config["vegetation"]["variables"])
@@ -308,155 +311,516 @@ class TransformerBaseline(nn.Module):
         return out
 
 
-class TransformerMSC(nn.Module):
-    def __init__(self, data_config, config, pretrained_encoders=None):
+class TransformerBaseline(nn.Module):
+    def __init__(self, data_config, config, pretrained_checkpoint=None):
         super().__init__()
+
         veg_dim = len(data_config["vegetation"]["variables"])
         weather_dim = len(data_config["weather"]["variables"])
-        T_veg = data_config["vegetation"]["sequence_length"]
-        T_weather = data_config["weather"]["sequence_length"]
-        memory_length = config.memory_length
+        climate_dim = veg_dim + weather_dim
 
         d_model = config.d_model
 
-        if pretrained_encoders is not None:
-            print("Using pretrained encoders for forecasting...")
-            self.veg_encoder = pretrained_encoders["veg"]
-            self.weather_encoder = pretrained_encoders["weather"]
-            self.weather_query_encoder = copy.deepcopy(pretrained_encoders["weather"])
-            print("Loaded pretrained encoders for forecasting.")
+        print(
+            f"Initializing Transformer with "
+            f"d_model={config.d_model}, "
+            f"num_layers={config.num_layers}, "
+            f"dropout={config.dropout}, "
+            f"num_heads={config.num_heads}"
+        )
 
-        else:
-            print(
-                f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
-            )
-            self.veg_encoder = TimeSeriesTransformerEncoder(
-                input_dim=veg_dim,
-                sequence_length=T_veg * memory_length,
-                d_model=d_model,
-                num_heads=config.num_heads,
-                num_layers=config.num_layers,
-                dropout=config.dropout,
-                use_cls=config.use_cls,
-                seasonal_positional_encoding=config.seasonal_positional_encoding,
-            )
+        # ------------------------------------------------------------------
+        # Hist encoder
+        # ------------------------------------------------------------------
+        self.hist_encoder = TimeSeriesTransformerEncoder(
+            input_dim=climate_dim,
+            sequence_length=config.context_length,  # // 5,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=config.use_cls,
+            seasonal_positional_encoding=False,  # config.seasonal_positional_encoding,
+        )
 
-            self.weather_forecast_encoder = TimeSeriesTransformerEncoder(
-                input_dim=weather_dim,
-                sequence_length=T_weather,
-                d_model=d_model,
-                num_heads=config.num_heads,
-                num_layers=config.num_layers,
-                dropout=config.dropout,
-                use_cls=config.use_cls,
-                seasonal_positional_encoding=config.seasonal_positional_encoding,
-            )
+        # ------------------------------------------------------------------
+        # Climate encoder
+        # ------------------------------------------------------------------
+        self.climate_encoder = TimeSeriesTransformerEncoder(
+            input_dim=climate_dim,
+            sequence_length=365,  # // 5,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=config.use_cls,
+            seasonal_positional_encoding=False,
+        )
 
-        # --- Decoder: weather_forecast attends to past context ---
+        # ------------------------------------------------------------------
+        # Forecast weather encoder
+        # ------------------------------------------------------------------
+        self.weather_forecast_encoder = TimeSeriesTransformerEncoder(
+            input_dim=weather_dim,
+            sequence_length=config.prediction_length,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=config.use_cls,
+            seasonal_positional_encoding=False,  # config.seasonal_positional_encoding,
+        )
+
+        if pretrained_checkpoint is not None:
+            self.load_pretrained(pretrained_checkpoint)
+
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
             nhead=config.num_heads,
             dropout=config.dropout,
             batch_first=True,
-            norm_first=True,  # pre-norm: more stable with small data
+            norm_first=True,
         )
-        # causal_mask = self.generate_causal_mask(T, x.device)
+
         self.decoder = nn.TransformerDecoder(
             decoder_layer,
             num_layers=config.num_layers,
         )
 
-        # --- Head ---
         self.head = nn.Linear(d_model, veg_dim)
 
     def forward(self, batch):
-        # Encode past: veg and weather history → sequence of tokens
-        memory = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
 
-        # Decode: weather forecast queries into past memory
-        forecast_query = self.weather_forecast_encoder(
-            batch["weather_forecast"]
-        )  # [B, T_w, d]
-        out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
+        # -------------------------------------------------------
+        # Climate input
+        # [B,365,veg_dim+weather_dim]
+        # -------------------------------------------------------
+        climate = torch.cat(
+            [
+                batch["msc"],
+                batch["weather_msc"],
+            ],
+            dim=-1,
+        )
 
-        # Project to vegetation space
-        out = self.head(out)  # [B, T_w, veg_dim]
-        return out
+        hist = torch.cat(
+            [
+                batch["vegetation_history"],
+                batch["weather_history"],
+            ],
+            dim=-1,
+        )
+
+        # -------------------------------------------------------
+        # Encode memories
+        # -------------------------------------------------------
+        hist_mem = self.hist_encoder(hist)
+
+        climate_mem = self.climate_encoder(climate)
+
+        # -------------------------------------------------------
+        # Memory for decoder
+        # -------------------------------------------------------
+        memory = torch.cat(
+            [
+                hist_mem,
+                climate_mem,
+            ],
+            dim=1,
+        )
+
+        # -------------------------------------------------------
+        # Forecast queries
+        # -------------------------------------------------------
+        forecast_query = self.weather_forecast_encoder(batch["weather_forecast"])
+
+        # -------------------------------------------------------
+        # Decode
+        # -------------------------------------------------------
+        out = self.decoder(
+            tgt=forecast_query,
+            memory=memory,
+        )
+
+        return self.head(out)
 
 
-class TransformerMaxEVI(nn.Module):
-    def __init__(self, data_config, config, pretrained_encoders=None):
+class DayOfYearEncoding(nn.Module):
+    """Stateless: turns integer day-of-year (0-364) into 2 channels (sin, cos)."""
+
+    def __init__(self, period: int = 365):
         super().__init__()
+        self.period = period
+
+    def forward(self, doy: torch.Tensor) -> torch.Tensor:
+        # doy: [B, T] integer or float day-of-year
+        angle = 2 * math.pi * doy.float() / self.period
+        return torch.stack([torch.sin(angle), torch.cos(angle)], dim=-1)  # [B, T, 2]
+
+
+class TransformerDecoder(nn.Module):
+    def __init__(self, data_config, config, pretrained_checkpoint=None):
+        super().__init__()
+
         veg_dim = len(data_config["vegetation"]["variables"])
         weather_dim = len(data_config["weather"]["variables"])
-        T_veg = data_config["vegetation"]["sequence_length"]
-        T_weather = data_config["weather"]["sequence_length"]
+        climate_dim = veg_dim + weather_dim
+
         d_model = config.d_model
+        self.prediction_length = config.prediction_length
 
-        if pretrained_encoders is not None:
-            print("Using pretrained encoders for forecasting...")
-            self.veg_encoder = pretrained_encoders["veg"]
-            self.weather_encoder = pretrained_encoders["weather"]
-            self.weather_query_encoder = copy.deepcopy(pretrained_encoders["weather"])
-            print("Loaded pretrained encoders for forecasting.")
+        print(
+            f"Initializing Transformer with "
+            f"d_model={config.d_model}, "
+            f"num_layers={config.num_layers}, "
+            f"dropout={config.dropout}, "
+            f"num_heads={config.num_heads}"
+        )
 
-        else:
-            print(
-                f"Initializing Transformer with d_model={config.d_model}, num_layers={config.num_layers}, dropout={config.dropout}, num_heads={config.num_heads}"
-            )
-            self.veg_encoder = TimeSeriesTransformerEncoder(
-                input_dim=veg_dim,
-                sequence_length=T_veg,
-                d_model=d_model,
-                num_heads=config.num_heads,
-                num_layers=config.num_layers,
-                dropout=config.dropout,
-                use_cls=config.use_cls,
-                seasonal_positional_encoding=config.seasonal_positional_encoding,
-            )
-            self.weather_encoder = TimeSeriesTransformerEncoder(
-                input_dim=weather_dim,
-                sequence_length=T_weather,
-                d_model=d_model,
-                num_heads=config.num_heads,
-                num_layers=config.num_layers,
-                dropout=config.dropout,
-                use_cls=config.use_cls,
-                seasonal_positional_encoding=config.seasonal_positional_encoding,
-            )
+        self.doy_encoding = DayOfYearEncoding(period=365)
 
-        # --- Decoder: weather_forecast attends to past context ---
+        # ------------------------------------------------------------------
+        # Hist encoder (past veg + weather residuals) — variable length,
+        # supports > 1 year via max_context_length + padding mask
+        # ------------------------------------------------------------------
+        self.hist_encoder = TimeSeriesTransformerEncoder(
+            input_dim=climate_dim + 2,  # +2 for sin/cos doy channels
+            sequence_length=config.context_length,  #  config.max_context_length,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=False,
+            seasonal_positional_encoding=False,
+        )
+
+        # ------------------------------------------------------------------
+        # Climate encoder (mean seasonal cycle, veg + weather, 365 days)
+        # ------------------------------------------------------------------
+        self.climate_encoder = TimeSeriesTransformerEncoder(
+            input_dim=climate_dim + 2,
+            sequence_length=365,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=False,
+            seasonal_positional_encoding=False,
+        )
+
+        # ------------------------------------------------------------------
+        # Forecast weather encoder — becomes the basis of the query
+        # ------------------------------------------------------------------
+        self.weather_forecast_encoder = TimeSeriesTransformerEncoder(
+            input_dim=weather_dim + 2,
+            sequence_length=config.prediction_length,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=False,
+            seasonal_positional_encoding=False,
+        )
+
+        if pretrained_checkpoint is not None:
+            self.load_pretrained(pretrained_checkpoint)
+
+        # ------------------------------------------------------------------
+        # Type embeddings: tag memory tokens by source (0=hist, 1=climate)
+        # ------------------------------------------------------------------
+        self.type_embed = nn.Embedding(2, d_model)
+
+        # Learnable per-lead-time query prior, added to weather-forecast
+        # encoding so the query isn't *purely* a function of weather content
+        self.query_pos = nn.Parameter(
+            torch.randn(1, config.prediction_length, d_model) * 0.02
+        )
+
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
             nhead=config.num_heads,
             dropout=config.dropout,
             batch_first=True,
-            norm_first=True,  # pre-norm: more stable with small data
+            norm_first=True,
         )
-        # causal_mask = self.generate_causal_mask(T, x.device)
         self.decoder = nn.TransformerDecoder(
-            decoder_layer,
-            num_layers=config.num_layers,
+            decoder_layer, num_layers=config.num_layers
         )
 
-        # --- Head ---
         self.head = nn.Linear(d_model, veg_dim)
-        self.pool = nn.Linear(d_model, 1)
+
+    def _with_doy(self, x: torch.Tensor, doy: torch.Tensor) -> torch.Tensor:
+        """Append sin/cos day-of-year channels to a [B, T, C] input."""
+        return torch.cat([x, self.doy_encoding(doy)], dim=-1)
 
     def forward(self, batch):
-        # Encode past: veg and weather history → sequence of tokens
-        veg_mem = self.veg_encoder(batch["vegetation_history"])  # [B, T_veg, d]
-        weather_mem = self.weather_encoder(batch["weather_history"])  # [B, T_w,   d]
+        B = batch["vegetation_history"].shape[0]
 
-        # Past memory = concat along sequence dim (not feature dim)
-        memory = torch.cat([veg_mem, weather_mem], dim=1)  # [B, T_veg+T_w, d]
+        # -------------------------------------------------------
+        # History (variable length; may span > 1 year)
+        # batch["hist_doy"]: [B, T_hist] calendar day-of-year per step
+        # batch["hist_mask"]: [B, T_hist] True where PADDED (optional)
+        # -------------------------------------------------------
+        hist = torch.cat(
+            [batch["vegetation_history"], batch["weather_history"]], dim=-1
+        )
+        hist = self._with_doy(hist, batch["hist_doy"])
+        hist_mem = self.hist_encoder(
+            hist
+        )  # , src_key_padding_mask=batch.get("hist_mask"))
+        hist_mem = hist_mem + self.type_embed.weight[0].view(1, 1, -1)
 
-        # Decode: weather forecast queries into past memory
-        forecast_query = self.weather_encoder(batch["weather_forecast"])  # [B, T_w, d]
-        out = self.decoder(tgt=forecast_query, memory=memory)  # [B, T_w, d]
+        # -------------------------------------------------------
+        # Climatology (365 days, shared calendar across batch)
+        # -------------------------------------------------------
+        climate = torch.cat([batch["msc"], batch["weather_msc"]], dim=-1)
+        climate = self._with_doy(climate, batch["climate_doy"])
+        climate_mem = self.climate_encoder(climate)
+        climate_mem = climate_mem + self.type_embed.weight[1].view(1, 1, -1)
 
-        # Project to vegetation space
-        out = self.head(out)  # [B, T_w, veg_dim]
-        weights = torch.softmax(self.pool(out), dim=1)  # [B, T, 1]
-        pooled = (out * weights).sum(dim=1)
-        return pooled
+        # -------------------------------------------------------
+        # Context memory: history + climatology, type-tagged
+        # -------------------------------------------------------
+        memory = torch.cat([hist_mem, climate_mem], dim=1)
+
+        # -------------------------------------------------------
+        # Query: forecast weather (known future condition) + learnable
+        # per-lead-time prior. batch["forecast_doy"]: [B, prediction_length]
+        # -------------------------------------------------------
+        forecast_weather = self._with_doy(
+            batch["weather_forecast"], batch["forecast_doy"]
+        )
+        forecast_mem = self.weather_forecast_encoder(forecast_weather)
+        query = forecast_mem + self.query_pos.expand(B, -1, -1)
+
+        # -------------------------------------------------------
+        # Decode
+        # -------------------------------------------------------
+        out = self.decoder(tgt=query, memory=memory)
+
+        return self.head(out)
+
+
+# ----------------------------------------------------------------------
+# Simple TimeMixer block
+# ----------------------------------------------------------------------
+class MixerBlock(nn.Module):
+    def __init__(self, d_model, dropout=0.1):
+        super().__init__()
+
+        self.time_norm = nn.LayerNorm(d_model)
+        self.feature_norm = nn.LayerNorm(d_model)
+
+        self.time_mlp = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
+
+        self.feature_mlp = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
+
+    def forward(self, x):
+
+        # temporal mixing
+        y = self.time_norm(x)
+        y = y.transpose(1, 2)
+        y = self.time_mlp(y.transpose(1, 2))
+        x = x + y
+
+        # feature mixing
+        y = self.feature_norm(x)
+        y = self.feature_mlp(y)
+        x = x + y
+
+        return x
+
+
+# ----------------------------------------------------------------------
+# Forecast model
+# ----------------------------------------------------------------------
+class TransformerTimeMixer(nn.Module):
+
+    def __init__(self, data_config, config):
+
+        super().__init__()
+
+        veg_dim = len(data_config["vegetation"]["variables"])
+        weather_dim = len(data_config["weather"]["variables"])
+        climate_dim = veg_dim + weather_dim
+
+        d_model = config.d_model
+
+        self.doy_encoding = DayOfYearEncoding()
+
+        # --------------------------------------------------------------
+        # Encoders
+        # --------------------------------------------------------------
+        self.hist_encoder = TimeSeriesTransformerEncoder(
+            input_dim=climate_dim + 2,
+            sequence_length=config.context_length,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=False,
+            seasonal_positional_encoding=False,
+        )
+
+        self.weather_encoder = TimeSeriesTransformerEncoder(
+            input_dim=weather_dim + 2,
+            sequence_length=config.prediction_length,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=False,
+            seasonal_positional_encoding=False,
+        )
+
+        self.climate_encoder = TimeSeriesTransformerEncoder(
+            input_dim=climate_dim + 2,
+            sequence_length=365,
+            d_model=d_model,
+            num_heads=config.num_heads,
+            num_layers=config.num_layers,
+            dropout=config.dropout,
+            use_cls=False,
+            seasonal_positional_encoding=False,
+        )
+
+        # --------------------------------------------------------------
+        # Single cross-attention
+        # --------------------------------------------------------------
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=config.num_heads,
+            dropout=config.dropout,
+            batch_first=True,
+        )
+
+        # --------------------------------------------------------------
+        # Fusion
+        # --------------------------------------------------------------
+        self.fusion = nn.Sequential(
+            nn.Linear(3 * d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(config.dropout),
+        )
+
+        self.mixers = nn.Sequential(
+            *[
+                MixerBlock(
+                    d_model=d_model,
+                    dropout=config.dropout,
+                )
+                for _ in range(config.num_layers)
+            ]
+        )
+
+        self.head = nn.Linear(d_model, veg_dim)
+
+    def _with_doy(self, x, doy):
+        return torch.cat(
+            [x, self.doy_encoding(doy)],
+            dim=-1,
+        )
+
+    def forward(self, batch):
+
+        # --------------------------------------------------------------
+        # History
+        # --------------------------------------------------------------
+        hist = torch.cat(
+            [
+                batch["vegetation_history"],
+                batch["weather_history"],
+            ],
+            dim=-1,
+        )
+
+        hist = self._with_doy(hist, batch["hist_doy"])
+
+        hist_features = self.hist_encoder(hist)
+
+        # --------------------------------------------------------------
+        # Future weather
+        # --------------------------------------------------------------
+        weather = self._with_doy(
+            batch["weather_forecast"],
+            batch["forecast_doy"],
+        )
+
+        weather_features = self.weather_encoder(weather)
+
+        # --------------------------------------------------------------
+        # Climate
+        # --------------------------------------------------------------
+        climate = torch.cat(
+            [
+                batch["msc"],
+                batch["weather_msc"],
+            ],
+            dim=-1,
+        )
+
+        climate = self._with_doy(
+            climate,
+            batch["climate_doy"],
+        )
+
+        climate_features = self.climate_encoder(climate)
+
+        # --------------------------------------------------------------
+        # Align climatology
+        #
+        # forecast_doy contains values in [0,364]
+        # --------------------------------------------------------------
+        idx = batch["forecast_doy"].long()
+
+        idx = idx.unsqueeze(-1).expand(
+            -1,
+            -1,
+            climate_features.shape[-1],
+        )
+
+        aligned_climate = torch.gather(
+            climate_features,
+            dim=1,
+            index=idx,
+        )
+
+        # --------------------------------------------------------------
+        # Retrieve relevant history
+        # --------------------------------------------------------------
+        history_context, _ = self.cross_attention(
+            query=weather_features,
+            key=hist_features,
+            value=hist_features,
+        )
+
+        # --------------------------------------------------------------
+        # Fuse everything
+        # --------------------------------------------------------------
+        x = torch.cat(
+            [
+                weather_features,
+                history_context,
+                aligned_climate,
+            ],
+            dim=-1,
+        )
+
+        x = self.fusion(x)
+
+        # --------------------------------------------------------------
+        # Mixer
+        # --------------------------------------------------------------
+        x = self.mixers(x)
+
+        return self.head(x)

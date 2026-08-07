@@ -15,6 +15,8 @@ from torch import optim
 import torch.nn as nn
 from pytorch_lightning import LightningModule
 
+from loss import QuantileLoss
+
 
 class ForecastingModule(LightningModule):
     """
@@ -25,7 +27,7 @@ class ForecastingModule(LightningModule):
         super().__init__()
         self.model = model
         self.config = config
-        self.loss_fn = nn.MSELoss()
+        self.loss_fn = QuantileLoss(q=0.5)  # nn.MSELoss()
         self.test_outputs = []
 
     def forward(self, batch):
