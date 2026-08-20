@@ -22,6 +22,7 @@ logs/
 outputs/
 evaluation_outputs/
 models_comparisons/
+toy_iav_results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

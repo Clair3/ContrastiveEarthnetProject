@@ -4,6 +4,74 @@ import torch.nn as nn
 from .positional_encoding import SeasonalPositionalEncoding, ClassicPositionalEncoding
 
 
+def build_encoder(
+    name,
+    input_dim,
+    sequence_length,
+    d_model,
+    **kwargs,
+):
+    if name == "transformer":
+        return TimeSeriesTransformerEncoder(
+            input_dim=input_dim,
+            sequence_length=sequence_length,
+            seasonal_positional_encoding=kwargs["seasonal_positional_encoding"],
+            d_model=d_model,
+            num_heads=kwargs["num_heads"],
+            num_layers=kwargs["num_layers"],
+            dropout=kwargs["dropout"],
+            use_cls=kwargs.get("use_cls", False),
+        )
+
+    elif name == "mamba":
+        return MambaEncoder(
+            input_dim=input_dim,
+            sequence_length=sequence_length,
+            d_model=d_model,
+            num_layers=kwargs["num_layers"],
+            dropout=kwargs["dropout"],
+            d_state=kwargs.get(
+                "mamba_d_state",
+                64,
+            ),
+            d_conv=kwargs.get(
+                "mamba_d_conv",
+                4,
+            ),
+            expand=kwargs.get(
+                "mamba_expand",
+                2,
+            ),
+            headdim=kwargs.get(
+                "mamba_headdim",
+                64,
+            ),
+        )
+
+    # elif name == "dlinear":
+    #     return DLinearEncoder(
+    #         input_dim=input_dim,
+    #         sequence_length=sequence_length,
+    #         d_model=d_model,
+    #         kernel_size=kwargs.get("kernel_size", 25),
+    #     )
+
+    # elif name == "patchtst":
+    #     return PatchTSTEncoder(...)
+
+    # elif name == "timemixer":
+    #     return TimeMixerEncoder(...)
+
+    # elif name == "micn":
+    #     return MICNEncoder(...)
+
+    # elif name == "mamba":
+    #     return MambaEncoder(...)
+
+    else:
+        raise ValueError(f"Unknown encoder: {name}")
+
+
 class TimeSeriesTransformerEncoder(nn.Module):
     def __init__(
         self,

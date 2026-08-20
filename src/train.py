@@ -424,7 +424,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--run_name",
-        default="bderu1i9",  # "bderu1i9", "scd7t68g", # None #"aj40n2mg", # None, #"0vh39sji", #"5umw093g",  # None,  # "chkpceo7", #"ewdpengg",  # None,  # "yom83w3e",  # None,  # "ho47mfll",  # None,  # "rysja5hl",  # None, # "lxqlhali",  # None, #"6tvil6wq",  # "r30aeonh",  # None,  # "6tvil6wq",  # None,  # "o03jeetw", # None, #"j3fgpisl", #"za90ubzz",  # None,  # "ug77kly8",  # None,  # "yqbclumu",  # None,  # "d0686mzv",  # None,  # "ppj1fh2v", #None,  # "a28nl7qz",  # None,  # "fleagmb2",  # None,  # "g4u7970n",  # "k6qige6q",  # "qoj0owg6",  # "53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k", "qoj0owg6",  #
+        default=None,  # ng4jsfgi",  # None,  # "bderu1i9",  # "bderu1i9", "scd7t68g", # None #"aj40n2mg", # None, #"0vh39sji", #"5umw093g",  # None,  # "chkpceo7", #"ewdpengg",  # None,  # "yom83w3e",  # None,  # "ho47mfll",  # None,  # "rysja5hl",  # None, # "lxqlhali",  # None, #"6tvil6wq",  # "r30aeonh",  # None,  # "6tvil6wq",  # None,  # "o03jeetw", # None, #"j3fgpisl", #"za90ubzz",  # None,  # "ug77kly8",  # None,  # "yqbclumu",  # None,  # "d0686mzv",  # None,  # "ppj1fh2v", #None,  # "a28nl7qz",  # None,  # "fleagmb2",  # None,  # "g4u7970n",  # "k6qige6q",  # "qoj0owg6",  # "53mphdie",  # "j1oq2t6k",  # "0epb2ml8",  # "j1oq2t6k", "qoj0owg6",  #
         help="Path of the model weights. If None, the training of the experiment is executed. If a path is provided, the evaluation mode is executed.",
     )
     parser.add_argument(

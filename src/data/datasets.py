@@ -32,6 +32,7 @@ class BaseDataset(Dataset):
 
         self.context_length = context_length
         self.prediction_length = prediction_length
+        print(self.context_length, self.prediction_length)
         self.stride = 16
 
         self.dataset = self.dataset_split(
@@ -64,35 +65,10 @@ class BaseDataset(Dataset):
         dataset = xr.open_zarr(dataset_path)
         print(f"Loading dataset from {dataset_path} and filtering for years {years}")
 
-        dataset = dataset.sel(
+        return dataset.sel(
             time_veg=pd.DatetimeIndex(dataset.time_veg.values).year.isin(years),
             time_weather=pd.DatetimeIndex(dataset.time_weather.values).year.isin(years),
-        )
-
-        # weather_vars = [
-        #     v for v, da in dataset.data_vars.items() if "time_weather" in da.dims
-        # ]
-        # veg_vars = [v for v, da in dataset.data_vars.items() if "time_veg" in da.dims]
-        #
-        # veg = (
-        #     dataset[veg_vars]
-        #     .rename(time_veg="time")
-        #     .groupby("time.year")
-        #     .map(lambda ds: ds.coarsen(time=5, boundary="trim").mean())
-        #     .rename(time="time_veg")
-        # )
-        #
-        # weather = (
-        #     dataset[weather_vars]
-        #     .rename(time_weather="time")
-        #     .groupby("time.year")
-        #     .map(lambda ds: ds.coarsen(time=5, boundary="trim").mean())
-        #     .rename(time="time_weather")
-        # )
-        # out = dataset.drop_vars(veg_vars + weather_vars)
-        # dataset = xr.merge([out, veg, weather])
-
-        return dataset.load()
+        ).load()
 
     def _create_training_pairs(self):
 

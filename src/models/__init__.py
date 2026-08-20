@@ -1,4 +1,5 @@
-from .encoders import TimeSeriesTransformerEncoder
+from .encoders import TimeSeriesTransformerEncoder, build_encoder
+from .revin import RevIN
 
 from .forecasting import (
     LSTM,
@@ -6,7 +7,8 @@ from .forecasting import (
     LinearRegressionBaseline,
     MLP,
     TransformerDecoder,
-    TransformerTimeMixer
+    TransformerTimeMixer,
+    ForecastModel,
 )
 
 from .probing import RegressionHead, CLSHead
@@ -20,4 +22,5 @@ ModelClass = {
     "CLSHead": CLSHead,
     "TransformerDecoder": TransformerDecoder,
     "TransformerTimeMixer": TransformerTimeMixer,
+    "ForecastModel": ForecastModel,
 }
