@@ -7,7 +7,6 @@ from torch.optim.lr_scheduler import (
     SequentialLR,
     LinearLR,
     CosineAnnealingLR,
-    PolynomialLR,
 )
 from pathlib import Path
 import torch.nn.functional as F
@@ -16,6 +15,7 @@ import torch.nn as nn
 from pytorch_lightning import LightningModule
 
 from loss import QuantileLoss
+from torchmetrics.regression import R2Score
 
 
 class ForecastingModule(LightningModule):
@@ -30,32 +30,11 @@ class ForecastingModule(LightningModule):
         self.loss_fn = QuantileLoss(q=0.5)  # nn.MSELoss()
         self.test_outputs = []
 
+        self.val_r2 = R2Score()
+        self.test_r2 = R2Score()
+
     def forward(self, batch):
         return self.model(batch)
-
-    def _compute_extremes_loss(self, y_pred, y_true, percentiles, mask):
-        percentiles = percentiles[mask]
-        extremes_mask = percentiles <= 0.1
-
-        if not extremes_mask.any():
-            return None
-
-        return self.loss_fn(
-            y_pred[mask][extremes_mask],
-            y_true[mask][extremes_mask],
-        )
-
-    def _compute_anomalies_loss(self, y_pred, y_true, msc, mask):
-        percentiles = percentiles[mask]
-        extremes_mask = percentiles <= 0.1
-
-        if not extremes_mask.any():
-            return None
-
-        return self.loss_fn(
-            y_pred[mask][extremes_mask],
-            y_true[mask][extremes_mask],
-        )
 
     def training_step(self, batch, batch_idx):
         if batch is None:
@@ -71,31 +50,12 @@ class ForecastingModule(LightningModule):
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
 
-        # msc = batch["msc"]
-        # Normalize per sample
-        # vmsc_min = msc.amin(dim=1, keepdim=True)
-        # vmsc_max = msc.amax(dim=1, keepdim=True)
-        # v#
-        # v# # Normalize MSC to [0, 1]
-        # vw = (msc - msc_min) / (msc_max - msc_min + 1e-8)
-        # v#
-        # v# # Optional: avoid giving almost zero weight to winter
-        # vw = 0.1 + 0.9 * w
-        # w = 0.1 + 0.9 * (msc - msc.min()) / (msc.max() - msc.min() + 1e-8)
-
         mask = ~torch.isnan(y_true)
 
-        # w = w[:, : mask.size(1), :][mask]
         y_pred = y_pred[mask]
         y_true = y_true[mask]
-        # print(y_pred.shape, y_true.shape, mask.shape)  # w.shape)
-
-        # loss = (w * (y_pred - y_true) ** 2).mean()
-        # print(loss)
 
         loss = self.loss_fn(y_pred, y_true)
-        #
-        # loss = (w * loss).mean()
 
         self.log(
             "train_loss",
@@ -115,35 +75,14 @@ class ForecastingModule(LightningModule):
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
 
-        # Shape should match y_true
-        # msc = batch["msc"]
-        # Normalize per sample
-        # msc_min = msc.amin(dim=1, keepdim=True)
-        # msc_max = msc.amax(dim=1, keepdim=True)
-        #
-        # # Normalize MSC to [0, 1]
-        # w = (msc - msc_min) / (msc_max - msc_min + 1e-8)
-        #
-        # # Optional: avoid giving almost zero weight to winter
-        # w = 0.2 + 0.8 * w
-
         mask = ~torch.isnan(y_true)
 
-        # w = w[:, : mask.size(1), :][mask]
-        y_pred = y_pred[mask]
-        y_true = y_true[mask]
+        y_pred_valid = y_pred[mask]
+        y_true_valid = y_true[mask]
 
-        # loss_fn must have reduction="none"
-        loss = self.loss_fn(y_pred, y_true)
+        loss = self.loss_fn(y_pred_valid, y_true_valid)
 
-        # loss = (w * loss).mean()
-
-        # y_pred = self(batch)
-        # y_true = batch["vegetation_forecast"]
-        #
-        # mask = ~torch.isnan(y_true)
-        #
-        # loss = self.loss_fn(y_pred[mask], y_true[mask])
+        self.val_r2.update(y_pred_valid, y_true_valid)
 
         self.log(
             "val_loss",
@@ -151,39 +90,35 @@ class ForecastingModule(LightningModule):
             on_step=False,
             on_epoch=True,
             prog_bar=True,
-            batch_size=y_true.shape[0],
+            batch_size=y_true_valid.shape[0],
         )
 
-        if "percentiles_forecast" in batch:
-            extremes_loss = self._compute_extremes_loss(
-                y_pred,
-                y_true,
-                batch["percentiles_forecast"],
-                mask,
-            )
-
-            if extremes_loss is not None:
-                self.log(
-                    "val_extremes_loss",
-                    extremes_loss,
-                    on_step=False,
-                    on_epoch=True,
-                    prog_bar=True,
-                    batch_size=y_true.shape[0],
-                )
+        self.log(
+            "val_r2",
+            self.val_r2,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+        )
 
         return loss
 
     def test_step(self, batch, batch_idx):
         if batch is None:
             return None
+
         y_pred = self(batch)
         y_true = batch["vegetation_forecast"]
         persistence = batch["vegetation_history"][:, -1, :]
 
         mask = ~torch.isnan(y_true)
 
-        loss = self.loss_fn(y_pred[mask], y_true[mask])
+        y_pred_valid = y_pred[mask]
+        y_true_valid = y_true[mask]
+
+        loss = self.loss_fn(y_pred_valid, y_true_valid)
+
+        self.test_r2.update(y_pred_valid, y_true_valid)
 
         self.log(
             "test_loss",
@@ -191,18 +126,16 @@ class ForecastingModule(LightningModule):
             on_step=False,
             on_epoch=True,
             prog_bar=True,
-            batch_size=y_true.shape[0],
+            batch_size=y_true_valid.shape[0],
         )
 
-        if "percentiles_forecast" in batch:
-            extremes_loss = self._compute_extremes_loss(
-                y_pred,
-                y_true,
-                batch["percentiles_forecast"],
-                mask,
-            )
-            if extremes_loss is not None:
-                self.log("test_extremes_loss", extremes_loss)
+        self.log(
+            "test_r2",
+            self.test_r2,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+        )
 
         self.test_outputs.append(
             {
@@ -214,6 +147,7 @@ class ForecastingModule(LightningModule):
                 "sample_id": batch["sample_id"].cpu(),
             }
         )
+
         return loss
 
     def on_test_epoch_end(self):
@@ -272,12 +206,14 @@ class ForecastingModule(LightningModule):
                     "window",
                     dataset.dataset.time_veg.values[forecast_origins],
                 ),
-                "lead_time": np.arange(self.config.prediction_length),
+                "lead_time": np.arange(predictions.shape[1]),
             },
         )
 
         ds.attrs["time_reference"] = "forecast_origin indexes dataset.time_veg"
-        ds.attrs["prediction_length"] = self.config.prediction_length
+        ds.attrs["prediction_length"] = np.arange(
+            predictions.shape[1]
+        )  # self.config.prediction_length
 
         print("Saving path: ", Path(self.config.output_dir) / "predictions.zarr")
         ds.to_zarr(

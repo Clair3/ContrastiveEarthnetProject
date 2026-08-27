@@ -13,6 +13,10 @@ from .datasets import (
 from .batch_sampler import BatchSampler
 
 
+def days_to_steps(days: int, sampling_days: int) -> int:
+    return max(1, round(days / sampling_days))
+
+
 class ContrastiveDataModule(LightningDataModule):
     """
     DataModule for temporal contrastive learning with a held-out test year.
@@ -87,11 +91,11 @@ class ContrastiveDataModule(LightningDataModule):
         return self._build_dataloader(self.test_dataset, shuffle=False)
 
 
-class ForecastingDataModule(ContrastiveDataModule):
+class ForecastingDataModule(LightningDataModule):
     def __init__(
         self,
-        context_length,
-        prediction_length,
+        context_days,
+        prediction_days,
         data_config,
         batch_size=16,
         num_workers=16,
@@ -99,15 +103,17 @@ class ForecastingDataModule(ContrastiveDataModule):
         super().__init__(data_config, batch_size, num_workers)
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.context_length = context_length
-        self.prediction_length = prediction_length
+
+        self.context_days = context_days
+        self.prediction_days = prediction_days
 
         self.dataset_path = Path(data_config["path"])
         self.train_years = data_config["forecasting"]["train"]
         self.val_years = data_config["forecasting"]["validation"]
         self.test_years = data_config["forecasting"]["test"]
-        self.thresholds_path = data_config["thresholds_path"]
-        self.percentiles_path = data_config["percentiles_path"]
+        self.vegetation_indices = data_config["vegetation"]["variables"]
+        self.weather_vars = data_config["weather"]["variables"]
+        self.sampling_days = data_config["sampling_days"]
 
     def setup(self, stage=None):
         self.train_dataset = self._build_train_dataset(years=self.train_years)
@@ -120,8 +126,9 @@ class ForecastingDataModule(ContrastiveDataModule):
             vegetation_indices=self.vegetation_indices,
             weather_vars=self.weather_vars,
             years=years,
-            context_length=self.context_length,
-            prediction_length=self.prediction_length,
+            context_days=self.context_days,
+            prediction_days=self.prediction_days,
+            sampling_days=self.sampling_days,
         )
 
     def _build_val_dataset(self, years):
@@ -130,9 +137,30 @@ class ForecastingDataModule(ContrastiveDataModule):
             vegetation_indices=self.vegetation_indices,
             weather_vars=self.weather_vars,
             years=years,
-            context_length=self.context_length,
-            prediction_length=self.prediction_length,
+            context_days=self.context_days,
+            prediction_days=self.prediction_days,
+            sampling_days=self.sampling_days,
         )
+
+    def _build_dataloader(self, dataset, shuffle=True):
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            num_workers=self.num_workers,
+            collate_fn=safe_collate,
+            pin_memory=True,
+            persistent_workers=self.num_workers > 0,
+        )
+
+    def train_dataloader(self):
+        return self._build_dataloader(self.train_dataset, shuffle=True)
+
+    def val_dataloader(self):
+        return self._build_dataloader(self.val_dataset, shuffle=False)
+
+    def test_dataloader(self):
+        return self._build_dataloader(self.test_dataset, shuffle=False)
 
 
 def safe_collate(batch):
