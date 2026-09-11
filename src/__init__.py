@@ -2,6 +2,8 @@ from src.data import ContrastiveDataModule, ForecastingDataModule
 from src.modules.contrastive import ContrastiveModule
 from src.modules.forecasting import ForecastingModule
 from src.models import TimeSeriesTransformerEncoder, ModelClass
+from src.loss import QuantileLoss
+
 
 from pathlib import Path
 

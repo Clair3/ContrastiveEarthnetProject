@@ -14,8 +14,23 @@ from torch import optim
 import torch.nn as nn
 from pytorch_lightning import LightningModule
 
-from loss import QuantileLoss
+# from loss import QuantileLoss
 from torchmetrics.regression import R2Score
+
+
+class QuantileLoss(nn.Module):
+
+    def __init__(self, q=0.5):
+
+        super().__init__()
+
+        self.q = q
+
+    def forward(self, pred, target):
+
+        error = target - pred
+
+        return torch.mean(torch.maximum(self.q * error, (self.q - 1) * error))
 
 
 class ForecastingModule(LightningModule):
@@ -214,6 +229,7 @@ class ForecastingModule(LightningModule):
         ds.attrs["prediction_length"] = np.arange(
             predictions.shape[1]
         )  # self.config.prediction_length
+        saving_path = Path(self.config.output_dir) / "predictions.zarr"
 
         print("Saving path: ", Path(self.config.output_dir) / "predictions.zarr")
         ds.to_zarr(

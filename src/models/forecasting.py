@@ -686,16 +686,16 @@ class TransformerTimeMixer(nn.Module):
             seasonal_positional_encoding=False,
         )
 
-        self.climate_encoder = TimeSeriesTransformerEncoder(
-            input_dim=climate_dim + 2,
-            sequence_length=365,
-            d_model=d_model,
-            num_heads=config.num_heads,
-            num_layers=config.num_layers,
-            dropout=config.dropout,
-            use_cls=False,
-            seasonal_positional_encoding=False,
-        )
+        # self.climate_encoder = TimeSeriesTransformerEncoder(
+        #     input_dim=climate_dim + 2,
+        #     sequence_length=365,
+        #     d_model=d_model,
+        #     num_heads=config.num_heads,
+        #     num_layers=config.num_layers,
+        #     dropout=config.dropout,
+        #     use_cls=False,
+        #     seasonal_positional_encoding=False,
+        # )
 
         # --------------------------------------------------------------
         # Single cross-attention
@@ -711,7 +711,7 @@ class TransformerTimeMixer(nn.Module):
         # Fusion
         # --------------------------------------------------------------
         self.fusion = nn.Sequential(
-            nn.Linear(3 * d_model, d_model),
+            nn.Linear(2 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(config.dropout),
         )
@@ -764,39 +764,39 @@ class TransformerTimeMixer(nn.Module):
         # --------------------------------------------------------------
         # Climate
         # --------------------------------------------------------------
-        climate = torch.cat(
-            [
-                batch["msc"],
-                batch["weather_msc"],
-            ],
-            dim=-1,
-        )
+        # climate = torch.cat(
+        #     [
+        #         batch["msc"],
+        #         batch["weather_msc"],
+        #     ],
+        #     dim=-1,
+        # )
 
-        climate = self._with_doy(
-            climate,
-            batch["climate_doy"],
-        )
-
-        climate_features = self.climate_encoder(climate)
+        # climate = self._with_doy(
+        #    climate,
+        #    batch["climate_doy"],
+        # )
+        #
+        # climate_features = self.climate_encoder(climate)
 
         # --------------------------------------------------------------
         # Align climatology
         #
         # forecast_doy contains values in [0,364]
         # --------------------------------------------------------------
-        idx = batch["forecast_doy"].long()
-
-        idx = idx.unsqueeze(-1).expand(
-            -1,
-            -1,
-            climate_features.shape[-1],
-        )
-
-        aligned_climate = torch.gather(
-            climate_features,
-            dim=1,
-            index=idx,
-        )
+        # idx = batch["forecast_doy"].long()
+        #
+        # idx = idx.unsqueeze(-1).expand(
+        #     -1,
+        #     -1,
+        #     climate_features.shape[-1],
+        # )
+        #
+        # aligned_climate = torch.gather(
+        #     climate_features,
+        #     dim=1,
+        #     index=idx,
+        # )
 
         # --------------------------------------------------------------
         # Retrieve relevant history
@@ -814,7 +814,7 @@ class TransformerTimeMixer(nn.Module):
             [
                 weather_features,
                 history_context,
-                aligned_climate,
+                # aligned_climate,
             ],
             dim=-1,
         )
@@ -1153,16 +1153,16 @@ class ForecastModel(nn.Module):
         # Climate
         # --------------------------------------------------------------
 
-        self.climate_encoder = build_encoder(
-            name=config.encoder_name,
-            input_dim=climate_dim + 2,
-            sequence_length=days_to_steps(
-                365,
-                data_config["sampling_days"],
-            ),
-            d_model=d_model,
-            **encoder_kwargs,
-        )
+        # self.climate_encoder = build_encoder(
+        #     name=config.encoder_name,
+        #     input_dim=climate_dim + 2,
+        #     sequence_length=days_to_steps(
+        #         365,
+        #         data_config["sampling_days"],
+        #     ),
+        #     d_model=d_model,
+        #     **encoder_kwargs,
+        # )
 
         # --------------------------------------------------------------
         # Cross-attention
@@ -1181,7 +1181,7 @@ class ForecastModel(nn.Module):
 
         self.fusion = nn.Sequential(
             nn.Linear(
-                3 * d_model,
+                2 * d_model,
                 d_model,
             ),
             nn.GELU(),
@@ -1267,38 +1267,38 @@ class ForecastModel(nn.Module):
         # Climate / climatology
         # ==============================================================
 
-        climate = torch.cat(
-            [
-                batch["msc"],
-                batch["weather_msc"],
-            ],
-            dim=-1,
-        )
+        # climate = torch.cat(
+        #     [
+        #         batch["msc"],
+        #         batch["weather_msc"],
+        #     ],
+        #     dim=-1,
+        # )
+        #
+        # climate = self._with_doy(
+        #     climate,
+        #     batch["climate_doy"],
+        # )
 
-        climate = self._with_doy(
-            climate,
-            batch["climate_doy"],
-        )
-
-        climate_features = self.climate_encoder(climate)
+        # climate_features = self.climate_encoder(climate)
 
         # ==============================================================
         # Align climatology with forecast dates
         # ==============================================================
 
-        idx = batch["forecast_doy"].long()
-
-        idx = idx.unsqueeze(-1).expand(
-            -1,
-            -1,
-            climate_features.shape[-1],
-        )
-
-        aligned_climate = torch.gather(
-            climate_features,
-            dim=1,
-            index=idx,
-        )
+        # idx = batch["forecast_doy"].long()
+        #
+        # idx = idx.unsqueeze(-1).expand(
+        #     -1,
+        #     -1,
+        #     climate_features.shape[-1],
+        # )
+        #
+        # aligned_climate = torch.gather(
+        #     climate_features,
+        #     dim=1,
+        #     index=idx,
+        # )
 
         # ==============================================================
         # Retrieve relevant history
@@ -1318,7 +1318,7 @@ class ForecastModel(nn.Module):
             [
                 weather_features,
                 history_context,
-                aligned_climate,
+                # aligned_climate,
             ],
             dim=-1,
         )
@@ -1693,3 +1693,177 @@ class ForecastModelM3(nn.Module):
         x = self.fusion(x)
         x = self.mixers(x)
         return self.head(x)
+
+
+import torch
+import torch.nn as nn
+
+
+class RAFT(nn.Module):
+    """
+    RAFT baseline adapted to the project's ForecastingDataModule interface.
+
+    Input:
+        batch["vegetation_history"]:
+            [B, context_length, vegetation_dim]
+
+        batch["retrieval"]:
+            [B, topm, prediction_length, vegetation_dim]
+
+        batch["retrieval_weights"]:
+            [B, topm]
+
+    Output:
+        [B, prediction_length, vegetation_dim]
+    """
+
+    def __init__(self, data_config, config):
+        super().__init__()
+
+        veg_dim = len(data_config["vegetation"]["variables"])
+
+        context_length = days_to_steps(
+            config.context_days,
+            data_config["sampling_days"],
+        )
+
+        prediction_length = days_to_steps(
+            config.prediction_days,
+            data_config["sampling_days"],
+        )
+
+        self.veg_dim = veg_dim
+        self.context_length = context_length
+        self.prediction_length = prediction_length
+
+        # --------------------------------------------------
+        # Direct forecasting branch
+        # --------------------------------------------------
+
+        self.linear_x = nn.Linear(
+            context_length,
+            prediction_length,
+        )
+
+        # --------------------------------------------------
+        # Retrieval branch
+        #
+        # The retrieved future already has the correct
+        # prediction length, but RAFT learns a transformation
+        # before combining it with the direct forecast.
+        # --------------------------------------------------
+
+        self.linear_retrieval = nn.Linear(
+            prediction_length,
+            prediction_length,
+        )
+
+        # --------------------------------------------------
+        # Combine direct + retrieval forecasts
+        # --------------------------------------------------
+
+        self.linear_pred = nn.Linear(
+            2 * prediction_length,
+            prediction_length,
+        )
+
+    def forward(self, batch):
+
+        # ==================================================
+        # Input
+        # ==================================================
+
+        x = batch["vegetation_history"]
+
+        # [B, context_length, veg_dim]
+
+        retrieval = batch["retrieval"]
+
+        # [B, topm, prediction_length, veg_dim]
+
+        weights = batch["retrieval_weights"]
+
+        # [B, topm]
+
+        # ==================================================
+        # Direct forecasting branch
+        # ==================================================
+
+        # Last observed EVI value.
+        #
+        # This is the same offset-style treatment used
+        # in the original RAFT implementation.
+
+        x_offset = x[:, -1:, :].detach()
+
+        x_norm = x - x_offset
+
+        # [B, context_length, C]
+        #       ↓
+        # [B, C, context_length]
+        #       ↓
+        # [B, C, prediction_length]
+        #       ↓
+        # [B, prediction_length, C]
+
+        x_pred = self.linear_x(x_norm.permute(0, 2, 1)).permute(0, 2, 1)
+
+        # ==================================================
+        # Retrieval branch
+        # ==================================================
+
+        # Weighted combination of the top-k retrieved
+        # future trajectories.
+        #
+        # retrieval:
+        #     [B, K, P, C]
+        #
+        # weights:
+        #     [B, K]
+        #
+        # result:
+        #     [B, P, C]
+
+        retrieval_pred = (retrieval * weights[:, :, None, None]).sum(dim=1)
+
+        # ==================================================
+        # Retrieval transformation
+        # ==================================================
+
+        retrieval_pred = self.linear_retrieval(retrieval_pred.permute(0, 2, 1)).permute(
+            0, 2, 1
+        )
+
+        # ==================================================
+        # Combine
+        # ==================================================
+
+        # [B, P, C] + [B, P, C]
+        #
+        # concatenate along the temporal dimension
+        # because the original RAFT implementation applies
+        # its final linear layer channel-wise.
+
+        pred = torch.cat(
+            [
+                x_pred,
+                retrieval_pred,
+            ],
+            dim=1,
+        )
+
+        # [B, 2P, C]
+        #      ↓
+        # [B, C, 2P]
+        #      ↓
+        # [B, C, P]
+        #      ↓
+        # [B, P, C]
+
+        pred = self.linear_pred(pred.permute(0, 2, 1)).permute(0, 2, 1)
+
+        # Restore original EVI level.
+
+        pred = pred + x_offset
+
+        return pred

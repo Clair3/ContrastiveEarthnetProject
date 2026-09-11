@@ -10,7 +10,9 @@ from .datasets import (
     ForecastingTrainDataset,
     ForecastingValDataset,
 )
+
 from .batch_sampler import BatchSampler
+from .raft_dataset import RAFTDataset
 
 
 def days_to_steps(days: int, sampling_days: int) -> int:
@@ -115,10 +117,54 @@ class ForecastingDataModule(LightningDataModule):
         self.weather_vars = data_config["weather"]["variables"]
         self.sampling_days = data_config["sampling_days"]
 
+    def setupRAFT(self, stage=None):
+        train_base = self._build_train_dataset(years=self.train_years)
+
+        val_base = self._build_val_dataset(years=self.val_years)
+
+        test_base = self._build_val_dataset(years=self.test_years)
+
+        self.train_dataset = RAFTDataset(
+            train_base,
+            "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/PassageDatasets/raft/raft_train.pt",
+        )
+
+        self.val_dataset = RAFTDataset(
+            val_base,
+            "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/PassageDatasets/raft/raft_val.pt",
+        )
+
+        self.test_dataset = RAFTDataset(
+            test_base,
+            "/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/PassageDatasets/raft/raft_test.pt",
+        )
+
     def setup(self, stage=None):
         self.train_dataset = self._build_train_dataset(years=self.train_years)
         self.val_dataset = self._build_val_dataset(years=self.val_years)
         self.test_dataset = self._build_val_dataset(years=self.test_years)
+
+    # build_analog_dataset(
+    #     dataset=self.train_dataset,
+    #     output_path="/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/analogs/analog_evi_same_location.pt",
+    #     similarity="evi",
+    #     k=5,
+    #     same_location=True,
+    # )
+    # build_analog_dataset(
+    #     dataset=self.train_dataset,
+    #     output_path="/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/analogs/analog_evi_any_location.pt",
+    #     similarity="evi",
+    #     k=5,
+    #     same_location=False,
+    # )
+
+    # Build retrieval database ONLY from training data
+    # self.analog_database = AnalogDatabase(
+    #     dataset=self.train_dataset,
+    #     context_length=self.train_dataset.context_length,
+    #     prediction_length=self.train_dataset.prediction_length,
+    # )
 
     def _build_train_dataset(self, years):
         return ForecastingTrainDataset(

@@ -8,6 +8,7 @@ from .forecasting import (
     TransformerDecoder,
     TransformerTimeMixer,
     ForecastModel,
+    RAFT,
 )
 
 from .probing import RegressionHead, CLSHead
@@ -21,7 +22,8 @@ from .external_forecasting import (
     MICN,
     TimesNet,
     Mamba,
-    Transformer
+    Transformer,
+    TransformerWeatherCovariates,
 )
 
 
@@ -44,5 +46,7 @@ ModelClass = {
     "MICN": MICN,
     "TimesNet": TimesNet,
     "Mamba": Mamba,
-    "Transformer": Transformer
+    "Transformer": Transformer,
+    "TransformerWeatherCovariates": TransformerWeatherCovariates,
+    "RAFT": RAFT,
 }
