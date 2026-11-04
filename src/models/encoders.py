@@ -18,7 +18,6 @@ def build_encoder(
         return TimeSeriesTransformerEncoder(
             input_dim=input_dim,
             sequence_length=sequence_length,
-            seasonal_positional_encoding=kwargs["seasonal_positional_encoding"],
             d_model=d_model,
             num_heads=kwargs["num_heads"],
             num_layers=kwargs["num_layers"],
@@ -66,7 +65,6 @@ class TimeSeriesTransformerEncoder(nn.Module):
         self,
         input_dim,
         sequence_length,
-        seasonal_positional_encoding,
         d_model,
         num_heads,
         num_layers,
@@ -83,11 +81,10 @@ class TimeSeriesTransformerEncoder(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        self.positional_encoding = (
-            SeasonalPositionalEncoding(d_model, sequence_length=sequence_length)
-            if seasonal_positional_encoding
-            else ClassicPositionalEncoding(d_model, max_len=sequence_length)
+        self.positional_encoding = ClassicPositionalEncoding(
+            d_model, max_len=sequence_length
         )
+
         self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
 
         # self.norm = nn.LayerNorm(d_model)

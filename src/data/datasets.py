@@ -38,6 +38,7 @@ class BaseDataset(Dataset):
         self.dataset = self.dataset_split(
             dataset_path=dataset_path,
             years=years,
+            context_days=context_days,
         )
 
         self.num_samples = len(self.dataset.sample)
@@ -52,15 +53,14 @@ class BaseDataset(Dataset):
             prediction_days,
             sampling_days,
         )
+
         self.observations_per_year = days_to_steps(
             365,
             sampling_days,
         )
 
-        print(f"context: {context_days} days -> " f"{self.context_length} steps")
-        print(
-            f"prediction: {prediction_days} days -> " f"{self.prediction_length} steps"
-        )
+        print(f"context: {context_days} days -> {self.context_length} steps")
+        print(f"prediction: {prediction_days} days -> {self.prediction_length} steps")
 
         self.stride = days_to_steps(15, sampling_days)
 
@@ -75,23 +75,32 @@ class BaseDataset(Dataset):
             for sample_id in range(self.num_samples)
         }
 
-    def dataset_split(self, dataset_path: str, years: list[int]) -> xr.Dataset:
+    def dataset_split(
+        self,
+        dataset_path: str,
+        years: list[int],
+        context_days: int,
+    ) -> xr.Dataset:
         """
-        Create a dataset split containing only data from specified years.
-
-        Args:
-            dataset: Input dataset with time_veg and time_weather dimensions
-            years: List of years to include in this split
-
-        Returns:
-            Dataset filtered to only include samples from the specified years
+        Create a dataset split containing the requested years plus
+        enough preceding data to provide the temporal context.
         """
         dataset = xr.open_zarr(dataset_path)
-        print(f"Loading dataset from {dataset_path} and filtering for years {years}")
+
+        print(
+            f"Loading dataset from {dataset_path} "
+            f"and filtering for years {years} "
+            f"with {context_days} days of context"
+        )
+
+        start_date = pd.Timestamp(f"{min(years)}-01-01") - pd.Timedelta(
+            days=context_days
+        )
+        end_date = pd.Timestamp(f"{max(years)}-12-31 23:59:59")
 
         return dataset.sel(
-            time_veg=pd.DatetimeIndex(dataset.time_veg.values).year.isin(years),
-            time_weather=pd.DatetimeIndex(dataset.time_weather.values).year.isin(years),
+            time_veg=slice(start_date, end_date),
+            time_weather=slice(start_date, end_date),
         ).load()
 
     def _create_training_pairs(self):
@@ -117,38 +126,6 @@ class BaseDataset(Dataset):
             f"num_samples={self.num_samples}, "
             f"num_windows={len(self.training_pairs)}"
         )
-
-    # def _preload_data(self):
-    #    self.vegetation = []
-    #    self.weather = []
-    #    self.msc = []
-    #    self.weather_msc = []
-    #    self._build_doy_lookup()
-    #    for sample_id in range(self.num_samples):
-    #        sample = self.dataset.isel(sample=sample_id)
-    #        veg = torch.as_tensor(
-    #            np.stack(
-    #                [sample[var].values for var in self.vegetation_indices],
-    #                axis=1,
-    #            ),
-    #            dtype=torch.float32,
-    #        )
-    #        weather = torch.as_tensor(
-    #            np.stack(
-    #                [sample[f"{var}_anom"].values for var in self.weather_vars],
-    #                axis=1,
-    #            ),
-    #            dtype=torch.float32,
-    #        )
-    #        msc = self._preload_msc(sample_id)
-    #        weather_msc = self._preload_weather_msc(sample_id)
-    #        # Expand climatology onto the time axis
-    #        msc_time = msc[self.doy_lookup]
-    #        weather_msc_time = weather_msc[self.doy_lookup]
-    #        self.vegetation.append(veg)
-    #        self.weather.append(weather)
-    #        self.msc.append(msc_time)
-    #        self.weather_msc.append(weather_msc_time)
 
     def _preload_data(self):
         self.vegetation = []
@@ -191,11 +168,6 @@ class BaseDataset(Dataset):
             [sample[f"{var}_msc"].values for var in self.weather_vars],
             axis=1,
         )
-
-        # Remove Feb 29 if present
-        # if weather_msc.shape[0] == 366:
-        #     weather_msc = np.delete(weather_msc, 59, axis=0)
-
         return torch.as_tensor(
             weather_msc,
             dtype=torch.float32,
@@ -264,105 +236,6 @@ class BaseDataset(Dataset):
         )
         return sample
 
-    # def _get_sample(self, sample_id, t0, include_metadata=False):
-
-
-#
-#    veg = self.vegetation[sample_id]
-#    weather = self.weather[sample_id]
-#    weather_msc = self.weather_msc[sample_id]
-#    msc = self.msc[sample_id]
-#
-#    msc_slice = slice(
-#        t0 - self.observations_per_year,
-#        t0,
-#    )
-#
-#    hist_slice = slice(
-#        t0 - self.context_length,
-#        t0,
-#    )
-#
-#    forecast_slice = slice(
-#        t0,
-#        t0 + self.prediction_length,
-#    )
-#
-#    weather_msc = weather_msc[msc_slice]
-#    msc = msc[msc_slice]
-#
-#    vegetation_history = veg[hist_slice]
-#    weather_history = weather[hist_slice]
-#
-#    vegetation_forecast = veg[forecast_slice]
-#    weather_forecast = weather[forecast_slice]
-#
-#    hist_doy = self.doy_lookup[hist_slice]
-#    climate_doy = self.doy_lookup[msc_slice]
-#    forecast_doy = self.doy_lookup[forecast_slice]
-#
-#    self._validate_tensors(
-#        vegetation_history,
-#        vegetation_forecast,
-#        weather_forecast,
-#    )
-#
-#    sample = {
-#        "msc": msc,
-#        "weather_msc": weather_msc,
-#        "vegetation_history": vegetation_history,
-#        "weather_history": weather_history,
-#        "vegetation_forecast": vegetation_forecast,
-#        "weather_forecast": weather_forecast,
-#        "hist_doy": hist_doy,
-#        "climate_doy": climate_doy,
-#        "forecast_doy": forecast_doy,
-#    }
-#
-#    if include_metadata:
-#        sample.update(
-#            {
-#                "sample_id": torch.tensor(sample_id),
-#                "location": self.locations[sample_id],
-#                "forecast_origin": torch.tensor(t0),
-#            }
-#        )
-#
-#    return sample
-#
-
-#
-
-
-class ContrastiveDataset(BaseDataset):
-
-    def __init__(self, dataset_path, vegetation_indices, weather_vars, years):
-
-        super().__init__(dataset_path, vegetation_indices, weather_vars, years)
-        self._create_training_pairs(years=years)
-        self.samples = [self._preload_sample(i, years) for i in range(self.num_samples)]
-
-    def __getitem__(self, idx) -> dict | None:
-        sample_id, year = self.training_pairs[idx]
-        try:
-            vegetation, weather = self.samples[sample_id][year]
-            self._validate_tensors(vegetation, weather)
-
-            max_evi = self._compute_max_evi(vegetation)
-            sum_precip = self._compute_sum_precip(weather)
-
-            data = {
-                "vegetation": vegetation,
-                "weather": weather,
-                "max_evi": max_evi,
-                "sum_precip": sum_precip,
-                "location": self.locations[sample_id],
-            }
-            return data
-        except Exception as e:
-            # logging.warning(f"Skipping {sample_id}: {e}")
-            return None
-
 
 class ForecastingTrainDataset(BaseDataset):
     def __init__(self, *args, **kwargs):
@@ -395,11 +268,9 @@ class ForecastingTrainDataset(BaseDataset):
 
             if self.transform is not None:
                 sample = self.transform(sample)
-            # sample["index"] = torch.tensor(index, dtype=torch.long)
             return sample
 
         except Exception as e:
-            # print(f"Skipping sample {idx} due to {e}.")
             return None
 
 
@@ -414,87 +285,6 @@ class ForecastingValDataset(BaseDataset):
                 include_metadata=True,
             )
 
-            # sample["index"] = torch.tensor(
-            #    index,
-            #    dtype=torch.long,
-            # )
             return sample
         except Exception as e:
             return None
-
-
-#     def __getitem__(self, idx):
-#         try:
-#             sample_id, t0 = self.training_pairs[idx]
-#             return self._get_sample(
-#                 sample_id,
-#                 t0,
-#                 include_metadata=True,
-#             )
-#         except Exception as e:
-#             # print(f"Skipping sample {idx} due to {e}.")
-#             return None
-
-
-#  def _preload_data(self):
-#         self.vegetation = []
-#         self.weather = []
-#         self._build_doy_lookup()
-#         for sample_id in range(self.num_samples):
-#             sample = self.dataset.isel(sample=sample_id)
-#             veg = torch.as_tensor(
-#                 np.stack(
-#                     [sample[var].values for var in self.vegetation_indices],
-#                     axis=1,
-#                 ),
-#                 dtype=torch.float32,
-#             )
-#             weather = torch.as_tensor(
-#                 np.stack(
-#                     [sample[var].values for var in self.weather_vars],
-#                     axis=1,
-#                 ),
-#                 dtype=torch.float32,
-#             )
-#             self.vegetation.append(veg)
-#             self.weather.append(weather)
-
-# def _get_sample(self, sample_id, t0, include_metadata=False):
-#         veg = self.vegetation[sample_id]
-#         weather = self.weather[sample_id]
-#         hist_slice = slice(
-#             t0 - self.context_length,
-#             t0,
-#         )
-#         forecast_slice = slice(
-#             t0,
-#             t0 + self.prediction_length,
-#         )
-#         vegetation_history = veg[hist_slice]
-#         weather_history = weather[hist_slice]
-#         vegetation_forecast = veg[forecast_slice]
-#         weather_forecast = weather[forecast_slice]
-#         hist_doy = self.doy_lookup[hist_slice]
-#         forecast_doy = self.doy_lookup[forecast_slice]
-#         self._validate_tensors(
-#             vegetation_history,
-#             vegetation_forecast,
-#             weather_forecast,
-#         )
-#         sample = {
-#             "vegetation_history": vegetation_history,
-#             "weather_history": weather_history,
-#             "vegetation_forecast": vegetation_forecast,
-#             "weather_forecast": weather_forecast,
-#             "hist_doy": hist_doy,
-#             "forecast_doy": forecast_doy,
-#         }
-#         if include_metadata:
-#             sample.update(
-#                 {
-#                     "sample_id": torch.tensor(sample_id),
-#                     "location": self.locations[sample_id],
-#                     "forecast_origin": torch.tensor(t0),
-#                 }
-#             )
-#         return sample

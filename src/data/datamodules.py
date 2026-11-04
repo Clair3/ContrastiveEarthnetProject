@@ -6,7 +6,6 @@ from torch.utils.data.dataloader import default_collate
 from torch.utils.data import DataLoader
 
 from .datasets import (
-    ContrastiveDataset,
     ForecastingTrainDataset,
     ForecastingValDataset,
 )

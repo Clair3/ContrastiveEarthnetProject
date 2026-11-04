@@ -42,7 +42,7 @@ class ForecastingModule(LightningModule):
         super().__init__()
         self.model = model
         self.config = config
-        self.loss_fn = QuantileLoss(q=0.5)  # nn.MSELoss()
+        self.loss_fn = nn.MSELoss()  # QuantileLoss(q=0.5)  #
         self.test_outputs = []
 
         self.val_r2 = R2Score()
@@ -229,13 +229,15 @@ class ForecastingModule(LightningModule):
         ds.attrs["prediction_length"] = np.arange(
             predictions.shape[1]
         )  # self.config.prediction_length
-        saving_path = Path(self.config.output_dir) / "predictions.zarr"
 
-        print("Saving path: ", Path(self.config.output_dir) / "predictions.zarr")
-        ds.to_zarr(
-            Path(self.config.output_dir) / "predictions.zarr",
-            mode="w",
-        )
+        output_dir = Path(self.config.output_dir)
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        saving_path = output_dir / "predictions.zarr"
+
+        print("Saving path: ", saving_path)
+        ds.to_zarr(saving_path, mode="w")
 
         self.test_outputs.clear()
 
