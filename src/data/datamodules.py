@@ -11,7 +11,6 @@ from .datasets import (
 )
 
 from .batch_sampler import BatchSampler
-from .raft_dataset import RAFTDataset
 
 
 def days_to_steps(days: int, sampling_days: int) -> int:
@@ -143,27 +142,6 @@ class ForecastingDataModule(LightningDataModule):
         self.val_dataset = self._build_val_dataset(years=self.val_years)
         self.test_dataset = self._build_val_dataset(years=self.test_years)
 
-    # build_analog_dataset(
-    #     dataset=self.train_dataset,
-    #     output_path="/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/analogs/analog_evi_same_location.pt",
-    #     similarity="evi",
-    #     k=5,
-    #     same_location=True,
-    # )
-    # build_analog_dataset(
-    #     dataset=self.train_dataset,
-    #     output_path="/Net/Groups/BGI/tscratch/crobin/ContrastiveEarthnetProject/datasets/analogs/analog_evi_any_location.pt",
-    #     similarity="evi",
-    #     k=5,
-    #     same_location=False,
-    # )
-
-    # Build retrieval database ONLY from training data
-    # self.analog_database = AnalogDatabase(
-    #     dataset=self.train_dataset,
-    #     context_length=self.train_dataset.context_length,
-    #     prediction_length=self.train_dataset.prediction_length,
-    # )
 
     def _build_train_dataset(self, years):
         return ForecastingTrainDataset(

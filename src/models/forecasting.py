@@ -829,22 +829,154 @@ class TransformerTimeMixer(nn.Module):
         return self.head(x)
 
 
+class GatedFusion(nn.Module):
+    """
+    Gated residual fusion between future features
+    and historical context.
+    """
+
+    def __init__(self, d_model, dropout):
+        super().__init__()
+
+        self.projection = nn.Linear(2 * d_model, d_model)
+        self.gate = nn.Linear(2 * d_model, d_model)
+
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, future, history):
+
+        combined = torch.cat([future, history], dim=-1)
+
+        candidate = self.activation(self.projection(combined))
+        gate = torch.sigmoid(self.gate(combined))
+
+        # Interpolate between fused information and
+        # the original future representation.
+        x = gate * candidate + (1.0 - gate) * future
+
+        return self.dropout(x)
+
+
+class TemporalConvBlock(nn.Module):
+    """
+    Lightweight residual temporal CNN.
+    Preserves [B, T, D].
+    """
+
+    def __init__(self, d_model, dropout):
+        super().__init__()
+
+        self.norm = nn.LayerNorm(d_model)
+
+        self.depthwise = nn.Conv1d(
+            d_model,
+            d_model,
+            kernel_size=3,
+            padding=1,
+            groups=d_model,
+        )
+
+        self.pointwise = nn.Conv1d(
+            d_model,
+            d_model,
+            kernel_size=1,
+        )
+
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+
+        residual = x
+
+        x = self.norm(x)
+        x = x.transpose(1, 2)
+
+        x = self.depthwise(x)
+        x = self.activation(x)
+        x = self.pointwise(x)
+
+        x = x.transpose(1, 2)
+
+        return residual + self.dropout(x)
+
 
 import torch
 import torch.nn as nn
 
 
-class ForecastModel(nn.Module):
+class ForecastModelAblation(nn.Module):
+
+    ABLATIONS = {
+        "full": {},
+        "separate_history": {
+            "history_mode": "separate",
+        },
+        "linear_future_encoder": {
+            "future_encoder_mode": "linear",
+        },
+        "mean_history": {
+            "history_retrieval": "mean",
+        },
+        "no_mixer": {
+            "decoder_mode": "none",
+        },
+        "no_hist_weather": {
+            "use_hist_weather": False,
+        },
+        "no_future_weather": {
+            "use_future_weather": False,
+        },
+        "gated_fusion": {
+            "fusion_mode": "gated",
+        },
+        "cnn_decoder": {
+            "decoder_mode": "cnn",
+        },
+    }
 
     def __init__(self, data_config, config):
         super().__init__()
 
-        self.model_version = config.get("model_version", 4)
+        # --------------------------------------------------
+        # Ablation configuration
+        # --------------------------------------------------
 
-        if self.model_version not in (1, 2, 3, 4):
-            raise ValueError("model_version must be 1, 2, 3, or 4")
+        self.ablation = config.get("ablation", "full")
+
+        if self.ablation not in self.ABLATIONS:
+            raise ValueError(
+                f"Unknown ablation: {self.ablation}. "
+                f"Available: {list(self.ABLATIONS)}"
+            )
+
+        options = {
+            "history_mode": "shared",
+            "future_encoder_mode": "temporal",
+            "history_retrieval": "cross_attention",
+            "fusion_mode": "concat",
+            "decoder_mode": "mixer",
+            "use_hist_weather": True,
+            "use_future_weather": True,
+        }
+
+        options.update(self.ABLATIONS[self.ablation])
+
+        self.history_mode = options["history_mode"]
+        self.future_encoder_mode = options["future_encoder_mode"]
+        self.history_retrieval = options["history_retrieval"]
+        self.fusion_mode = options["fusion_mode"]
+        self.decoder_mode = options["decoder_mode"]
+        self.use_hist_weather = options["use_hist_weather"]
+        self.use_future_weather = options["use_future_weather"]
+
+        # --------------------------------------------------
+        # Dimensions
+        # --------------------------------------------------
 
         veg_dim = len(data_config["vegetation"]["variables"])
+
         weather_dim = len(data_config["weather"]["variables"])
 
         context_length = days_to_steps(
@@ -858,6 +990,383 @@ class ForecastModel(nn.Module):
         )
 
         d_model = config.d_model
+        dropout = config.dropout
+
+        self.doy_encoding = DayOfYearEncoding()
+
+        # Original implementation assumes 2 DOY features.
+        doy_dim = 2
+
+        # --------------------------------------------------
+        # Encoder configuration
+        # --------------------------------------------------
+
+        encoder_kwargs = {
+            "num_layers": config.num_layers,
+        }
+
+        if config.encoder_name == "transformer":
+
+            encoder_kwargs.update(
+                {
+                    "num_heads": config.num_heads,
+                    "dropout": config.dropout,
+                    "seasonal_positional_encoding": config.seasonal_positional_encoding,
+                    "use_cls": False,
+                }
+            )
+
+        elif config.encoder_name == "mamba":
+
+            encoder_kwargs.update(
+                {
+                    "mamba_d_state": config.mamba_d_state,
+                    "mamba_d_conv": config.mamba_d_conv,
+                    "mamba_expand": config.mamba_expand,
+                    "mamba_headdim": config.mamba_headdim,
+                }
+            )
+
+        # --------------------------------------------------
+        # Historical encoder
+        # --------------------------------------------------
+
+        if self.history_mode == "shared":
+
+            hist_input_dim = veg_dim + doy_dim
+
+            if self.use_hist_weather:
+                hist_input_dim += weather_dim
+
+            self.hist_encoder = build_encoder(
+                name=config.encoder_name,
+                input_dim=hist_input_dim,
+                sequence_length=context_length,
+                d_model=d_model,
+                **encoder_kwargs,
+            )
+
+        elif self.history_mode == "separate":
+
+            if not self.use_hist_weather:
+                raise ValueError(
+                    "Separate history encoders require " "historical weather."
+                )
+
+            self.veg_hist_encoder = build_encoder(
+                name=config.encoder_name,
+                input_dim=veg_dim + doy_dim,
+                sequence_length=context_length,
+                d_model=d_model,
+                **encoder_kwargs,
+            )
+
+            self.weather_hist_encoder = build_encoder(
+                name=config.encoder_name,
+                input_dim=weather_dim + doy_dim,
+                sequence_length=context_length,
+                d_model=d_model,
+                **encoder_kwargs,
+            )
+
+            self.hist_fusion = nn.Linear(
+                2 * d_model,
+                d_model,
+            )
+
+        # --------------------------------------------------
+        # Future weather encoder
+        # --------------------------------------------------
+
+        future_input_dim = doy_dim
+
+        if self.use_future_weather:
+            future_input_dim += weather_dim
+
+        if self.future_encoder_mode == "linear":
+
+            self.weather_encoder = nn.Linear(
+                future_input_dim,
+                d_model,
+            )
+
+        elif self.future_encoder_mode == "temporal":
+
+            self.weather_encoder = build_encoder(
+                name=config.encoder_name,
+                input_dim=future_input_dim,
+                sequence_length=prediction_length,
+                d_model=d_model,
+                **encoder_kwargs,
+            )
+
+        # --------------------------------------------------
+        # Historical retrieval
+        # --------------------------------------------------
+
+        if self.history_retrieval == "cross_attention":
+
+            self.cross_attention = nn.MultiheadAttention(
+                embed_dim=d_model,
+                num_heads=config.num_heads,
+                dropout=dropout,
+                batch_first=True,
+            )
+
+        # --------------------------------------------------
+        # Fusion
+        # --------------------------------------------------
+
+        if self.fusion_mode == "concat":
+
+            self.fusion = nn.Sequential(
+                nn.Linear(2 * d_model, d_model),
+                nn.GELU(),
+                nn.Dropout(dropout),
+            )
+
+        elif self.fusion_mode == "gated":
+
+            self.fusion = GatedFusion(
+                d_model=d_model,
+                dropout=dropout,
+            )
+
+        # --------------------------------------------------
+        # Forecast decoder
+        # --------------------------------------------------
+
+        if self.decoder_mode == "mixer":
+
+            self.mixers = nn.Sequential(
+                *[
+                    MixerBlock(
+                        d_model=d_model,
+                        dropout=dropout,
+                    )
+                    for _ in range(config.num_layers)
+                ]
+            )
+
+        elif self.decoder_mode == "cnn":
+
+            cnn_layers = config.get(
+                "cnn_layers",
+                config.num_layers,
+            )
+
+            self.mixers = nn.Sequential(
+                *[
+                    TemporalConvBlock(
+                        d_model=d_model,
+                        dropout=dropout,
+                    )
+                    for _ in range(cnn_layers)
+                ]
+            )
+
+        elif self.decoder_mode == "none":
+
+            self.mixers = nn.Identity()
+
+        # --------------------------------------------------
+        # Prediction head
+        # --------------------------------------------------
+
+        self.head = nn.Linear(
+            d_model,
+            veg_dim,
+        )
+
+    def _with_doy(self, x, doy):
+
+        return torch.cat(
+            [x, self.doy_encoding(doy)],
+            dim=-1,
+        )
+
+    def _encode_history(self, batch):
+
+        hist_doy = batch["hist_doy"]
+
+        # --------------------------------------------------
+        # Shared historical encoder
+        # --------------------------------------------------
+
+        if self.history_mode == "shared":
+
+            hist_inputs = [
+                batch["vegetation_history"],
+            ]
+
+            if self.use_hist_weather:
+                hist_inputs.append(batch["weather_history"])
+
+            hist = torch.cat(
+                hist_inputs,
+                dim=-1,
+            )
+
+            hist = self._with_doy(
+                hist,
+                hist_doy,
+            )
+
+            return self.hist_encoder(hist)
+
+        # --------------------------------------------------
+        # Separate historical encoders
+        # --------------------------------------------------
+
+        veg_hist = self._with_doy(
+            batch["vegetation_history"],
+            hist_doy,
+        )
+
+        weather_hist = self._with_doy(
+            batch["weather_history"],
+            hist_doy,
+        )
+
+        veg_features = self.veg_hist_encoder(veg_hist)
+
+        weather_features = self.weather_hist_encoder(weather_hist)
+
+        hist_features = torch.cat(
+            [veg_features, weather_features],
+            dim=-1,
+        )
+
+        return self.hist_fusion(hist_features)
+
+    def _encode_future(self, batch):
+
+        forecast_doy = batch["forecast_doy"]
+
+        # Always retain known calendar information.
+        future_inputs = [self.doy_encoding(forecast_doy)]
+
+        if self.use_future_weather:
+
+            future_inputs.insert(
+                0,
+                batch["weather_forecast"],
+            )
+
+        future = torch.cat(
+            future_inputs,
+            dim=-1,
+        )
+
+        return self.weather_encoder(future)
+
+    def _retrieve_history(
+        self,
+        hist_features,
+        weather_features,
+    ):
+
+        # --------------------------------------------------
+        # Global historical context
+        # --------------------------------------------------
+
+        if self.history_retrieval == "mean":
+
+            context = hist_features.mean(
+                dim=1,
+                keepdim=True,
+            )
+
+            return context.expand(
+                -1,
+                weather_features.shape[1],
+                -1,
+            )
+
+        # --------------------------------------------------
+        # Horizon-dependent cross-attention
+        # --------------------------------------------------
+
+        context, _ = self.cross_attention(
+            query=weather_features,
+            key=hist_features,
+            value=hist_features,
+            need_weights=False,
+        )
+
+        return context
+
+    def forward(self, batch):
+
+        # [B, context_length, d_model]
+        hist_features = self._encode_history(batch)
+
+        # [B, prediction_length, d_model]
+        weather_features = self._encode_future(batch)
+
+        # [B, prediction_length, d_model]
+        history_context = self._retrieve_history(
+            hist_features,
+            weather_features,
+        )
+
+        # --------------------------------------------------
+        # Fuse history and future information
+        # --------------------------------------------------
+
+        if self.fusion_mode == "concat":
+
+            x = torch.cat(
+                [weather_features, history_context],
+                dim=-1,
+            )
+
+            x = self.fusion(x)
+
+        else:
+
+            x = self.fusion(
+                weather_features,
+                history_context,
+            )
+
+        # --------------------------------------------------
+        # Temporal forecasting
+        # --------------------------------------------------
+
+        x = self.mixers(x)
+
+        # [B, prediction_length, veg_dim]
+        return self.head(x)
+
+
+class ForecastModelWithNaNsFlags(nn.Module):
+
+    def __init__(self, data_config, config):
+
+        super().__init__()
+
+        veg_dim = len(data_config["vegetation"]["variables"])
+
+        weather_dim = len(data_config["weather"]["variables"])
+
+        context_length = days_to_steps(
+            config.context_days,
+            data_config["sampling_days"],
+        )
+
+        prediction_length = days_to_steps(
+            config.prediction_days,
+            data_config["sampling_days"],
+        )
+
+        climate_dim = veg_dim + weather_dim
+
+        d_model = config.d_model
+
+        # --------------------------------------------------------------
+        # Day-of-year encoding
+        # --------------------------------------------------------------
 
         self.doy_encoding = DayOfYearEncoding()
 
@@ -865,199 +1374,182 @@ class ForecastModel(nn.Module):
             "num_layers": config.num_layers,
         }
 
+        print("encoder_name:", config.encoder_name)
+        print("encoder_kwargs:", encoder_kwargs)
+
         if config.encoder_name == "transformer":
-            encoder_kwargs.update({
-                "num_heads": config.num_heads,
-                "dropout": config.dropout,
-                "seasonal_positional_encoding":
-                    config.seasonal_positional_encoding,
-                "use_cls": False,
-            })
+            encoder_kwargs.update(
+                {
+                    "num_heads": config.num_heads,
+                    "dropout": config.dropout,
+                    "seasonal_positional_encoding": config.seasonal_positional_encoding,
+                }
+            )
 
         elif config.encoder_name == "mamba":
-            encoder_kwargs.update({
-                "mamba_d_state": config.mamba_d_state,
-                "mamba_d_conv": config.mamba_d_conv,
-                "mamba_expand": config.mamba_expand,
-                "mamba_headdim": config.mamba_headdim,
-            })
-
-        # --------------------------------------------------
-        # Historical encoder (all versions)
-        # --------------------------------------------------
+            encoder_kwargs.update(
+                {
+                    "mamba_d_state": config.mamba_d_state,
+                    "mamba_d_conv": config.mamba_d_conv,
+                    "mamba_expand": config.mamba_expand,
+                    "mamba_headdim": config.mamba_headdim,
+                }
+            )
+        print("encoder_name:", config.encoder_name)
+        print("encoder_kwargs:", encoder_kwargs)
+        # --------------------------------------------------------------
+        # History
+        # --------------------------------------------------------------
 
         self.hist_encoder = build_encoder(
             name=config.encoder_name,
-            input_dim=veg_dim + weather_dim + 2,
+            input_dim=climate_dim + veg_dim + 2,
             sequence_length=context_length,
             d_model=d_model,
             **encoder_kwargs,
         )
 
-        # --------------------------------------------------
-        # Future weather representation
-        # --------------------------------------------------
+        # --------------------------------------------------------------
+        # Future weather
+        # --------------------------------------------------------------
 
-        if self.model_version == 1:
+        self.weather_encoder = build_encoder(
+            name=config.encoder_name,
+            input_dim=weather_dim + 2,
+            sequence_length=prediction_length,
+            d_model=d_model,
+            **encoder_kwargs,
+        )
 
-            # Simple per-time-step linear projection
-            self.weather_encoder = nn.Linear(
-                weather_dim + 2,
-                d_model,
-            )
+        # --------------------------------------------------------------
+        # Cross-attention
+        # --------------------------------------------------------------
 
-        else:
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=config.num_heads,
+            dropout=config.dropout,
+            batch_first=True,
+        )
 
-            # Temporal encoder
-            self.weather_encoder = build_encoder(
-                name=config.encoder_name,
-                input_dim=weather_dim + 2,
-                sequence_length=prediction_length,
-                d_model=d_model,
-                **encoder_kwargs,
-            )
-
-        # --------------------------------------------------
-        # Cross-attention (V3 and V4)
-        # --------------------------------------------------
-
-        if self.model_version >= 3:
-
-            self.cross_attention = nn.MultiheadAttention(
-                embed_dim=d_model,
-                num_heads=config.num_heads,
-                dropout=config.dropout,
-                batch_first=True,
-            )
-
-        # --------------------------------------------------
-        # Fusion (all versions)
-        # --------------------------------------------------
+        # --------------------------------------------------------------
+        # Fusion
+        # --------------------------------------------------------------
 
         self.fusion = nn.Sequential(
-            nn.Linear(2 * d_model, d_model),
+            nn.Linear(
+                2 * d_model,
+                d_model,
+            ),
             nn.GELU(),
             nn.Dropout(config.dropout),
         )
 
-        # --------------------------------------------------
-        # Mixer (V4 only)
-        # --------------------------------------------------
-
-        if self.model_version == 4:
-
-            self.mixers = nn.Sequential(
-                *[
-                    MixerBlock(
-                        d_model=d_model,
-                        dropout=config.dropout,
-                    )
-                    for _ in range(config.num_layers)
-                ]
-            )
-
-        else:
-            self.mixers = nn.Identity()
-
-        # --------------------------------------------------
+        # --------------------------------------------------------------
         # Prediction head
-        # --------------------------------------------------
+        # --------------------------------------------------------------
 
-        self.head = nn.Linear(d_model, veg_dim)
+        self.head = nn.Linear(
+            d_model,
+            veg_dim,
+        )
 
     def _with_doy(self, x, doy):
+
         return torch.cat(
-            [x, self.doy_encoding(doy)],
+            [
+                x,
+                self.doy_encoding(doy),
+            ],
             dim=-1,
         )
 
     def forward(self, batch):
 
-        # --------------------------------------------------
-        # Historical sequence
-        # --------------------------------------------------
+        # ==============================================================
+        # History
+        # ==============================================================
 
+        vegetation_history = batch["vegetation_history"]
+
+        weather_history = batch["weather_history"]
+
+        # Identify missing EVI observations
+        veg_missing = torch.isnan(vegetation_history)
+
+        # Replace missing EVI with zero in normalized space
+        veg_filled = torch.nan_to_num(vegetation_history, nan=0.0)
+
+        # --------------------------------------------------------------
+        # Concatenate normalized history
+        # --------------------------------------------------------------
+
+        # Concatenate EVI, weather and missingness indicator
         hist = torch.cat(
             [
-                batch["vegetation_history"],
-                batch["weather_history"],
+                veg_filled,
+                weather_history,
+                veg_missing.to(vegetation_history.dtype),
             ],
             dim=-1,
         )
 
-        hist = self._with_doy(hist, batch["hist_doy"])
+        hist = self._with_doy(
+            hist,
+            batch["hist_doy"],
+        )
 
         hist_features = self.hist_encoder(hist)
 
-        # Expected shape: [B, context_length, d_model]
-
-        # --------------------------------------------------
+        # ==============================================================
         # Future weather
-        # --------------------------------------------------
+        # ==============================================================
+
+        weather = batch["weather_forecast"]
 
         weather = self._with_doy(
-            batch["weather_forecast"],
+            weather,
             batch["forecast_doy"],
         )
 
         weather_features = self.weather_encoder(weather)
 
-        # Expected shape: [B, prediction_length, d_model]
+        # ==============================================================
+        # Retrieve relevant history
+        # ==============================================================
 
-        # --------------------------------------------------
-        # Historical context
-        # --------------------------------------------------
+        history_context, _ = self.cross_attention(
+            query=weather_features,
+            key=hist_features,
+            value=hist_features,
+        )
 
-        if self.model_version <= 2:
-
-            # Global history representation
-            history_context = hist_features.mean(
-                dim=1,
-                keepdim=True,
-            )
-
-            history_context = history_context.expand(
-                -1,
-                weather_features.shape[1],
-                -1,
-            )
-
-        else:
-
-            # Time-dependent historical retrieval
-            history_context, _ = self.cross_attention(
-                query=weather_features,
-                key=hist_features,
-                value=hist_features,
-                need_weights=False,
-            )
-
-        # --------------------------------------------------
+        # ==============================================================
         # Fusion
-        # --------------------------------------------------
+        # ==============================================================
 
         x = torch.cat(
-            [weather_features, history_context],
+            [
+                weather_features,
+                history_context,
+                # aligned_climate,
+            ],
             dim=-1,
         )
 
         x = self.fusion(x)
 
-        # --------------------------------------------------
-        # Mixer (Identity for V1-V3)
-        # --------------------------------------------------
+        # ==============================================================
+        # Forecast in normalized vegetation space
+        # ==============================================================
 
-        x = self.mixers(x)
+        prediction = self.head(x)
 
-        # --------------------------------------------------
-        # Prediction
-        # --------------------------------------------------
-
-        return self.head(x)
+        return prediction
 
 
 
-class ForecastModelOld(nn.Module):
+class ForecastModel(nn.Module):
 
     def __init__(self, data_config, config):
 
@@ -1168,20 +1660,6 @@ class ForecastModelOld(nn.Module):
         )
 
         # --------------------------------------------------------------
-        # Mixer
-        # --------------------------------------------------------------
-
-        self.mixers = nn.Sequential(
-            *[
-                MixerBlock(
-                    d_model=d_model,
-                    dropout=config.dropout,
-                )
-                for _ in range(config.num_layers)
-            ]
-        )
-
-        # --------------------------------------------------------------
         # Prediction head
         # --------------------------------------------------------------
 
@@ -1260,18 +1738,11 @@ class ForecastModelOld(nn.Module):
             [
                 weather_features,
                 history_context,
-                # aligned_climate,
             ],
             dim=-1,
         )
 
         x = self.fusion(x)
-
-        # ==============================================================
-        # Mixer
-        # ==============================================================
-
-        x = self.mixers(x)
 
         # ==============================================================
         # Forecast in normalized vegetation space
@@ -1281,30 +1752,6 @@ class ForecastModelOld(nn.Module):
 
         return prediction
 
-
-class TimeXerForecastModel(nn.Module):
-    def forward(self, batch):
-
-        evi_history = batch["vegetation_history"]  # select EVI only
-        weather_history = batch["weather_history"]
-
-        x_enc = torch.cat(
-            [weather_history, evi_history],
-            dim=-1,
-        )
-
-        x_mark_enc = ...
-
-        return self.timexer(
-            x_enc,
-            x_mark_enc,
-            None,
-            None,
-        )
-
-
-import torch
-import torch.nn as nn
 
 
 class RAFT(nn.Module):

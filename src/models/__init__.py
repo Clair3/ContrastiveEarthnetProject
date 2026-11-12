@@ -6,7 +6,6 @@ from .forecasting import (
     LinearRegressionBaseline,
     MLP,
     TransformerDecoder,
-    TransformerTimeMixer,
     ForecastModel,
     RAFT,
 )
@@ -23,7 +22,6 @@ from .external_forecasting import (
     TimesNet,
     Mamba,
     Transformer,
-    TransformerWeatherCovariates,
 )
 
 
@@ -35,7 +33,6 @@ ModelClass = {
     "RegressionHead": RegressionHead,
     "CLSHead": CLSHead,
     "TransformerDecoder": TransformerDecoder,
-    # "TransformerTimeMixer": TransformerTimeMixer,
     "ForecastModel": ForecastModel,
     # External baselines
     "TimeXer": TimeXer,
@@ -47,6 +44,5 @@ ModelClass = {
     "TimesNet": TimesNet,
     "Mamba": Mamba,
     "Transformer": Transformer,
-    "TransformerWeatherCovariates": TransformerWeatherCovariates,
     "RAFT": RAFT,
 }

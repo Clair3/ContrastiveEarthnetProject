@@ -215,6 +215,23 @@ class ExternalForecastAdapter(nn.Module):
     # Input
     # ==========================================================
 
+    def _sanitize_tensor(self, tensor):
+        return torch.nan_to_num(
+            tensor,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+
+    def _prepare_model_device(self, tensor):
+        self.model.to(tensor.device)
+        for module in self.model.modules():
+            if hasattr(module, "device"):
+                try:
+                    module.device = tensor.device
+                except Exception:
+                    pass
+
     def _build_input(self, batch):
         """
         Convert our batch into the common external-model input.
@@ -267,7 +284,8 @@ class ExternalForecastAdapter(nn.Module):
 
     def forward(self, batch):
 
-        x_enc = self._build_input(batch)
+        x_enc = self._sanitize_tensor(self._build_input(batch))
+        self._prepare_model_device(x_enc)
 
         # All models in this repository expose the standard
         # forecasting interface.
@@ -280,6 +298,8 @@ class ExternalForecastAdapter(nn.Module):
 
         if output is None:
             raise RuntimeError(f"{self.__class__.__name__} returned None.")
+
+        output = self._sanitize_tensor(output)
 
         # ------------------------------------------------------
         # Keep EVI target only
@@ -528,7 +548,8 @@ class MICN(ExternalForecastAdapter):
 
     def forward(self, batch):
 
-        x_enc = self._build_input(batch)
+        x_enc = self._sanitize_tensor(self._build_input(batch))
+        self._prepare_model_device(x_enc)
 
         B = x_enc.shape[0]
         pred_len = self.model.pred_len
@@ -560,6 +581,8 @@ class MICN(ExternalForecastAdapter):
             x_dec,
             None,
         )
+
+        output = self._sanitize_tensor(output)
 
         if output.ndim != 3:
             raise RuntimeError(
@@ -661,16 +684,19 @@ class Transformer(ExternalForecastAdapter):
 
     def forward(self, batch):
 
-        evi = batch["vegetation_history"]
-        weather = batch["weather_history"]
+        evi = self._sanitize_tensor(batch["vegetation_history"])
+        weather = self._sanitize_tensor(batch["weather_history"])
 
-        x_enc = torch.cat(
-            [
-                weather,
-                evi,
-            ],
-            dim=-1,
+        x_enc = self._sanitize_tensor(
+            torch.cat(
+                [
+                    weather,
+                    evi,
+                ],
+                dim=-1,
+            )
         )
+        self._prepare_model_device(x_enc)
 
         B = x_enc.shape[0]
         pred_len = self.model.pred_len
@@ -701,94 +727,5 @@ class Transformer(ExternalForecastAdapter):
             None,
         )
 
-        return output[..., -1:]
-
-
-class TransformerWeatherCovariates(ExternalForecastAdapter):
-
-    OFFICIAL_MODEL = OfficialTransformer
-
-    def _build_config(self, data_config, config):
-
-        c = super()._build_config(
-            data_config,
-            config,
-        )
-
-        c.dec_in = c.enc_in
-        c.c_out = 1
-
-        c.d_layers = getattr(
-            config,
-            "d_layers",
-            1,
-        )
-
-        c.label_len = getattr(
-            config,
-            "label_len",
-            min(18, c.seq_len),
-        )
-
-        return c
-
-    def forward(self, batch):
-
-        vegetation_history = batch["vegetation_history"]
-        weather_history = batch["weather_history"]
-        weather_forecast = batch["weather_forecast"]
-
-        x_enc = torch.cat(
-            [
-                weather_history,
-                vegetation_history,
-            ],
-            dim=-1,
-        )
-
-        # Historical decoder context
-        label_len = self.official_config.label_len
-
-        dec_context = torch.cat(
-            [
-                weather_history[:, -label_len:],
-                vegetation_history[:, -label_len:],
-            ],
-            dim=-1,
-        )
-
-        # Future:
-        # weather is known
-        # EVI is unknown → zeros
-        vegetation_forecast = torch.zeros(
-            weather_forecast.shape[0],
-            weather_forecast.shape[1],
-            1,
-            device=weather_forecast.device,
-            dtype=weather_forecast.dtype,
-        )
-
-        dec_future = torch.cat(
-            [
-                weather_forecast,
-                vegetation_forecast,
-            ],
-            dim=-1,
-        )
-
-        x_dec = torch.cat(
-            [
-                dec_context,
-                dec_future,
-            ],
-            dim=1,
-        )
-
-        output = self.model(
-            x_enc,
-            None,
-            x_dec,
-            None,
-        )
-
+        output = self._sanitize_tensor(output)
         return output[..., -1:]
