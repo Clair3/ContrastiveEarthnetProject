@@ -829,6 +829,123 @@ class TransformerTimeMixer(nn.Module):
         return self.head(x)
 
 
+
+class SingleStreamForecastModel(nn.Module):
+    def __init__(self, data_config, config):
+        super().__init__()
+
+        veg_dim = len(data_config["vegetation"]["variables"])
+        weather_dim = len(data_config["weather"]["variables"])
+
+        context_length = days_to_steps(
+            config.context_days,
+            data_config["sampling_days"],
+        )
+        prediction_length = days_to_steps(
+            config.prediction_days,
+            data_config["sampling_days"],
+        )
+
+        self.doy_encoding = DayOfYearEncoding()
+
+        # EVI + meteorology + EVI missing flags + 2 DOY features
+        input_dim = 2 * veg_dim + weather_dim + 2
+
+        self.encoder = build_encoder(
+            name="transformer_nans_flags",
+            input_dim=input_dim,
+            sequence_length=context_length + prediction_length,
+            d_model=config.d_model,
+            num_layers=config.num_layers,
+            num_heads=config.num_heads,
+            dropout=config.dropout,
+        )
+
+        self.head = nn.Linear(config.d_model, veg_dim)
+
+    def forward(self, batch):
+
+        vegetation_history = batch["vegetation_history"]
+        weather_history = batch["weather_history"]
+        weather_future = batch["weather_forecast"]
+
+        B, H, _ = weather_future.shape
+
+        # This implementation assumes complete meteorological inputs.
+        # if (
+        #     torch.isnan(weather_history).any()
+        #     or torch.isnan(weather_future).any()
+        # ):
+        #     raise ValueError("Meteorological inputs contain NaNs.")
+
+        # --------------------------------------------------
+        # Historical sequence
+        # --------------------------------------------------
+
+        veg_missing = torch.isnan(vegetation_history)
+
+        veg_filled = torch.nan_to_num(
+            vegetation_history, nan=0.0
+        )
+
+        history = torch.cat(
+            [
+                veg_filled,
+                weather_history,
+                veg_missing.to(vegetation_history.dtype),
+                self.doy_encoding(batch["hist_doy"]),
+            ],
+            dim=-1,
+        )
+
+        # --------------------------------------------------
+        # Future sequence
+        # --------------------------------------------------
+
+        # Future EVI is unknown, not observed.
+        future_veg = vegetation_history.new_zeros(
+            B, H, vegetation_history.shape[-1]
+        )
+
+        # Flag every future EVI value as missing.
+        future_flags = torch.ones_like(future_veg)
+
+        future = torch.cat(
+            [
+                future_veg,
+                weather_future,
+                future_flags,
+                self.doy_encoding(batch["forecast_doy"]),
+            ],
+            dim=-1,
+        )
+
+        # --------------------------------------------------
+        # Single sequence: past followed by future
+        # --------------------------------------------------
+
+        sequence = torch.cat(
+            [history, future],
+            dim=1,
+        )
+
+        # --------------------------------------------------
+        # Transformer
+        # --------------------------------------------------
+
+        features = self.encoder(sequence)
+
+        # --------------------------------------------------
+        # Predict only the future EVI
+        # --------------------------------------------------
+
+        future_features = features[:, -H:, :]
+
+        prediction = self.head(future_features)
+
+        return prediction
+
+
 class GatedFusion(nn.Module):
     """
     Gated residual fusion between future features
@@ -906,7 +1023,7 @@ import torch
 import torch.nn as nn
 
 
-class ForecastModelAblation(nn.Module):
+class ForecastModelOld(nn.Module):
 
     ABLATIONS = {
         "full": {},
@@ -934,6 +1051,7 @@ class ForecastModelAblation(nn.Module):
         "cnn_decoder": {
             "decoder_mode": "cnn",
         },
+        "no_fusion": {"fusion_mode": "none"},
     }
 
     def __init__(self, data_config, config):
@@ -1322,7 +1440,8 @@ class ForecastModelAblation(nn.Module):
             )
 
             x = self.fusion(x)
-
+        elif self.fusion_mode == "None":
+            x = history_context
         else:
 
             x = self.fusion(
@@ -1734,15 +1853,15 @@ class ForecastModel(nn.Module):
         # Fusion
         # ==============================================================
 
-        x = torch.cat(
-            [
-                weather_features,
-                history_context,
-            ],
-            dim=-1,
-        )
+        # x = torch.cat(
+        #     [
+        #         weather_features,
+        #         history_context,
+        #     ],
+        #     dim=-1,
+        # )
 
-        x = self.fusion(x)
+        x = history_context #self.fusion(x)
 
         # ==============================================================
         # Forecast in normalized vegetation space

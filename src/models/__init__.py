@@ -8,6 +8,7 @@ from .forecasting import (
     TransformerDecoder,
     ForecastModel,
     RAFT,
+    SingleStreamForecastModel
 )
 
 from .probing import RegressionHead, CLSHead
@@ -34,6 +35,7 @@ ModelClass = {
     "CLSHead": CLSHead,
     "TransformerDecoder": TransformerDecoder,
     "ForecastModel": ForecastModel,
+    "SingleStreamForecastModel": SingleStreamForecastModel,
     # External baselines
     "TimeXer": TimeXer,
     "TimeMixer": TimeMixer,

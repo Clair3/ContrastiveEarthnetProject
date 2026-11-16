@@ -24,6 +24,16 @@ def build_encoder(
             dropout=kwargs["dropout"],
         )
 
+    if name == "transformer_nans_flags":
+            return TimeSeriesTransformerEncoderWithNaNsFlags(
+                input_dim=input_dim,
+                sequence_length=sequence_length,
+                d_model=d_model,
+                num_heads=kwargs["num_heads"],
+                num_layers=kwargs["num_layers"],
+                dropout=kwargs["dropout"],
+            )
+
     elif name == "mamba":
         return MambaEncoder(
             input_dim=input_dim,
